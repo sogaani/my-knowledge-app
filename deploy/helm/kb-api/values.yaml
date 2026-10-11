@@ -37,7 +37,7 @@ access:
   preventDestroy: true
 # Created out of band (see deploy/README.md). The chart only references them.
 secrets:
-  api: kb-api # WORKER_TOKEN, INGEST_TOKEN, CF_ACCESS_AUD
+  api: kb-api # WORKER_TOKEN, INGEST_TOKEN, CF_ACCESS_AUD, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY (Web Push; optional, see README §1)
   git: kb-git # deploy_key
   gitCrypt: kb-git-crypt # key
 config:

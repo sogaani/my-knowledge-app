@@ -6,6 +6,7 @@ export * from "./db";
 export * from "./query";
 export * from "./create";
 export * from "./bronze";
+export * from "./portfolio";
 export * from "./build";
 export * from "./maintain";
 export * from "./backup";

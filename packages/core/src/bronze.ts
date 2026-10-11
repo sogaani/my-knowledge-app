@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync, unlinkSync } from "node:fs";
 import { basename, extname, join } from "node:path";
 import { today, type KbConfig } from "./config";
+import { decodeText } from "./text";
 
 export type BronzeKind = "web" | "note" | "mail" | "file" | "book" | "image";
 
@@ -106,10 +107,10 @@ export function sourceExcerpt(cfg: KbConfig, id: string, opts: { full?: boolean;
   const meta = readMeta(cfg, id);
   if (!meta) return null;
   const dir = bronzeDir(cfg, id);
-  const textFile = meta.files.find((f) => f.endsWith(".md")) ?? meta.files.find((f) => /\.(txt|eml|html)$/.test(f));
+  const textFile = meta.files.find((f) => f.endsWith(".md")) ?? meta.files.find((f) => /\.(txt|csv|eml|html)$/i.test(f));
   let text = "";
   if (textFile) {
-    text = readFileSync(join(dir, textFile), "utf8");
+    text = decodeText(readFileSync(join(dir, textFile)));
     if (!opts.full) text = text.slice(0, opts.chars ?? 1500);
   }
   logAccess(cfg, { op: "source", id, full: !!opts.full, bytes: text.length });

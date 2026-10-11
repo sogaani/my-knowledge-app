@@ -39,4 +39,8 @@ export const api = {
   ask: (question: string) => req<{ message: ChatMessage; job: Job }>("/chat", { method: "POST", body: JSON.stringify({ question }) }),
   sync: () => req<{ changed: boolean }>("/sync", { method: "POST" }),
   build: () => req<{ files: string[] }>("/build", { method: "POST" }),
+  pushVapid: () => req<{ publicKey: string | null; subscriptions: number }>("/push/vapid"),
+  pushSubscribe: (sub: PushSubscriptionJSON) => req<{ ok: boolean }>("/push/subscribe", { method: "POST", body: JSON.stringify(sub) }),
+  pushUnsubscribe: (endpoint: string) => req<{ ok: boolean }>("/push/subscribe", { method: "DELETE", body: JSON.stringify({ endpoint }) }),
+  pushTest: () => req<{ sent: number; removed: number; failed: number }>("/push/test", { method: "POST" }),
 };

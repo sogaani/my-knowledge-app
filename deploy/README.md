@@ -27,6 +27,10 @@ kubectl create namespace my-knowledge
   `kubectl -n my-knowledge create secret generic kb-git-crypt --from-file=key=git-crypt.key`
 - **API secret**: `kubectl -n my-knowledge create secret generic kb-api --from-literal=WORKER_TOKEN=$(openssl rand -hex 32) --from-literal=INGEST_TOKEN=$(openssl rand -hex 32) --from-literal=CF_ACCESS_AUD=pending` (set the real AUD after the first sync, see §2)
   - Existing cluster: `kubectl -n my-knowledge patch secret kb-api --type merge -p '{"stringData":{"INGEST_TOKEN":"'"$(openssl rand -hex 32)"'"}}' && kubectl -n my-knowledge rollout restart deploy/kb-api`
+- **Web Push (VAPID)**, optional — without it the 売買 tab hides the notification button:
+  `cd apps/api && bunx web-push generate-vapid-keys` then
+  `kubectl -n my-knowledge patch secret kb-api --type merge -p '{"stringData":{"VAPID_PUBLIC_KEY":"<public>","VAPID_PRIVATE_KEY":"<private>","VAPID_SUBJECT":"mailto:soga.ani@gmail.com"}}' && kubectl -n my-knowledge rollout restart deploy/kb-api`.
+  Subscriptions live in `jobs.sqlite` (`push_subscriptions`); rotating the keys invalidates them (re-enable from the tab). Phones: Android Chrome works from the site; iOS needs the site added to the Home Screen (standalone app has its own cookies, so Access asks to log in again there).
 - **GHCR pull secret** (only if the package is private): `kubectl -n my-knowledge create secret docker-registry ghcr --docker-server=ghcr.io --docker-username=sogaani --docker-password=<PAT with read:packages>`, then set `imagePullSecrets: [{ name: ghcr }]` in values.
 
 ## 2. Cloudflare Access

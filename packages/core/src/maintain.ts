@@ -30,7 +30,7 @@ export function validateAll(cfg: KbConfig, reg: SchemaRegistry): Issue[] {
       else if (!readMeta(cfg, s)) issues.push({ level: "warn", path: n.path, msg: `Bronze ${s} not present on this machine` });
     }
     const text = readFileSync(n.absPath, "utf8");
-    if (/(^|[^0-9-])[0-9]{7,}([^0-9-]|$)/.test(text.replace(/isbn:.*|sha256.*|\d{8}-[a-z]+-[0-9a-f]{6}/gi, ""))) {
+    if (/(^|[^0-9-])[0-9]{7,}([^0-9-]|$)/.test(text.replace(/isbn:.*|sha256.*|\d{8}-[a-z]+-[0-9a-f]{6}|^\s*(total|total_value|buying_power|cash_jpy|cash_usd|margin_deposit|fx_usdjpy|positions):\s*-?[\d.]+\s*$/gim, ""))) {
       issues.push({ level: "error", path: n.path, msg: "long digit run (account/card number?)" });
     }
   }
@@ -96,7 +96,7 @@ export function lint(cfg: KbConfig, db: Database, opts: { staleDays?: number } =
   const orphans: string[] = [], stale: string[] = [], renewals: string[] = [], archiveCandidates: string[] = [];
   for (const r of rows) {
     const fm = JSON.parse(r.fm) as Record<string, unknown>;
-    if (!linked.has(r.path) && !["review"].includes(r.type)) orphans.push(r.path);
+    if (!linked.has(r.path) && !["review", "trade_plan"].includes(r.type)) orphans.push(r.path);
     if (["project", "learning"].includes(r.type) && r.status === "active" && r.updated && days(r.updated) > (opts.staleDays ?? 30)) stale.push(r.path);
     if (r.type === "subscription" && r.status === "active" && fm.next_renewal && days(String(fm.next_renewal)) > -14) renewals.push(`${r.path} (${fm.next_renewal})`);
     if (["done", "cancelled", "closed"].includes(r.status)) archiveCandidates.push(r.path);

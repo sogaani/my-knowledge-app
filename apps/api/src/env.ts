@@ -13,6 +13,10 @@ export const env = {
   ingestServiceTokenName: process.env.INGEST_SERVICE_TOKEN_NAME ?? "",
   ingestToken: process.env.INGEST_TOKEN ?? "",
   devBypassAuth: process.env.DEV_BYPASS_AUTH === "1",
+  // Web Push (VAPID). Generate once with `bunx web-push generate-vapid-keys`; empty = push disabled (routes answer publicKey: null).
+  vapidPublicKey: process.env.VAPID_PUBLIC_KEY ?? "",
+  vapidPrivateKey: process.env.VAPID_PRIVATE_KEY ?? "",
+  vapidSubject: process.env.VAPID_SUBJECT ?? "",
   gitAuthor: process.env.GIT_AUTHOR ?? "kb-web <kb-web@local>",
   syncIntervalSec: Number(process.env.SYNC_INTERVAL_SEC ?? 300),
 };

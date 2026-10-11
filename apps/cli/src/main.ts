@@ -3,7 +3,7 @@ import { join } from "node:path";
 import {
   loadConfig, openDb, indexNotes, SchemaRegistry, createNote, DuplicateError, patchFrontmatter, appendToSection,
   ingestFile, ingestUrl, sourceExcerpt, markProcessed, listInbox, parseFilters, runQuery, buildGold,
-  validateAll, archiveNote, lint, backupBronze, pruneBronze, logAccess, type BronzeKind,
+  validateAll, archiveNote, lint, backupBronze, pruneBronze, logAccess, importPortfolio, type BronzeKind,
   search, VectorStore, embedNotes, makeEmbedder, setupLindera, linderaStatus, resolveTokenizer, readVectorMeta, type SearchMode,
 } from "@kb/core";
 
@@ -18,7 +18,7 @@ function flags(args: string[]) {
     if (a.startsWith("--")) {
       const [k, v] = a.slice(2).split("=");
       if (v !== undefined) f[k] = v;
-      else if (args[i + 1] !== undefined && !args[i + 1].startsWith("--") && ["set", "dest", "kind", "text", "status", "older-than", "type", "limit", "order", "chars", "title", "folder", "section", "fields", "mode"].includes(k)) f[k] = args[++i];
+      else if (args[i + 1] !== undefined && !args[i + 1].startsWith("--") && ["set", "dest", "kind", "text", "status", "older-than", "type", "limit", "order", "chars", "title", "folder", "section", "fields", "mode", "account"].includes(k)) f[k] = args[++i];
       else f[k] = true;
     } else pos.push(a);
   }
@@ -249,6 +249,14 @@ switch (cmd) {
     console.log(r.join("\n") || "(nothing to prune)");
     break;
   }
+  case "portfolio": {
+    const { f, pos } = flags(argv);
+    const [sub, src] = pos;
+    if (sub !== "import" || !src) die('usage: kb portfolio import <csv|bronze-id> [--account 楽天証券]');
+    const r = importPortfolio(cfg, reg, db(), { src: src!, account: String(f.account ?? "楽天証券") });
+    console.log(`${r.created ? "created" : "updated"} ${r.path} (as of ${r.asOf}, ${r.positions} positions${r.bronzeId ? `, from ${r.bronzeId}` : ""})`);
+    break;
+  }
   case "root": {
     console.log(cfg.root);
     break;
@@ -264,6 +272,7 @@ switch (cmd) {
   ingest <path|url> [--kind] [--keep] | --all   move into Bronze, print id
   source <id> [--full]               Bronze meta + excerpt (logged)
   processed <id> <silver-path>...    record which Silver notes came from a Bronze item
+  portfolio import <csv|bronze-id> [--account 楽天証券]   update the portfolio note from a 楽天証券 asset CSV (CP932 ok)
   query [type=book rating>=4] [--text "..."] [--include-archive] [--json] [--limit n] [--order -updated]
   search "<query>" [type=book ...] [--mode hybrid|vector|keyword] [--limit 10] [--include-archive] [--spoilers] [--json]
                                      semantic + keyword search (LanceDB; Ollama for vectors)

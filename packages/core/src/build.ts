@@ -1,5 +1,6 @@
 import { mkdirSync, writeFileSync, readdirSync, unlinkSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { join, posix } from "node:path";
+import { readNote } from "./notes";
 import type { Database } from "bun:sqlite";
 import { today, type KbConfig } from "./config";
 import { runQuery, type QueryResult } from "./query";
@@ -91,6 +92,30 @@ export function buildGold(cfg: KbConfig, db: Database): string[] {
     out("37_suggestions.md", "# おすすめ\n\n（`recommend` スキルがここを更新します）\n");
   }
 
+  // 38 trading: latest trade_plan sheet + index of recent sheets + portfolio snapshot (git-crypt encrypted in the data repo)
+  const plans = q("type=trade_plan", { orderBy: "-date", limit: 30 });
+  const ports = q("type=portfolio");
+  if (!plans.length && !ports.length) out("38_trading.md", "# 売買実行シート\n\n（`trade-plan` スキルがここを更新します。保有資産は楽天証券の資産残高 CSV を投げ込むと `portfolio` ノートになります）\n");
+  else {
+    const latest = plans[0];
+    const sides = (n: QueryResult) => {
+      const os = Array.isArray(n.fm.orders) ? (n.fm.orders as { side?: string }[]) : [];
+      return { buy: os.filter((o) => o.side === "buy" || o.side === "add").length, sell: os.filter((o) => o.side === "sell" || o.side === "trim").length };
+    };
+    const latestBody = latest ? inlineBody(readNote(cfg, join(cfg.root, latest.path))?.body ?? "", latest.path) : "";
+    out("38_trading.md", [
+      `# 売買実行シート${latest ? `（${latest.fm.date ?? latest.updated} 更新）` : ""}`, "",
+      ...(latest ? [`> 元ノート: ${link(latest)} — 状態: ${latest.status}`, "", latestBody.trim(), ""] : ["（まだシートがありません。`trade-plan` を実行すると作られます）", ""]),
+      "## 直近のシート", "",
+      "| 日付 | 状態 | 買 | 売 | 要約 |", "|---|---|---|---|---|",
+      ...plans.map((n) => { const s = sides(n); return `| ${link(n)} | ${n.status} | ${s.buy} | ${s.sell} | ${n.summary} |`; }),
+      "", "## 保有資産", "",
+      ...(ports.length
+        ? ports.map((n) => `- ${link(n)} — ${n.fm.as_of ?? ""} 時点 / 評価額 ¥${Number(n.fm.total_value ?? 0).toLocaleString()} / 現物余力 ¥${Number(n.fm.buying_power ?? 0).toLocaleString()} / 株式 ${n.fm.positions ?? 0} 銘柄`)
+        : ["- （なし）楽天証券の資産残高 CSV を投げ込むと作られます"]),
+    ].join("\n"));
+  }
+
   // 30 home
   const reviews = q("type=review", { orderBy: "-updated", limit: 5 });
   const recent = runQuery(db, { filters: [], orderBy: "-updated", limit: 15 }).filter((n) => !n.path.startsWith("30_gold/"));
@@ -104,7 +129,8 @@ export function buildGold(cfg: KbConfig, db: Database): string[] {
     `- [映画・ドラマ](35_media/index.md) — 視聴済み ${mByStatus.watched?.length ?? 0}`,
     `- [プロジェクト](36_projects.md) — 進行中 ${pBy.active?.length ?? 0}`,
     "- [学習](31_learning/index.md)",
-    "- [おすすめ](37_suggestions.md)", "",
+    "- [おすすめ](37_suggestions.md)",
+    `- [売買シート](38_trading.md)${plans.length ? ` — 最新 ${plans[0].fm.date ?? plans[0].updated}` : ""}`, "",
     "## 最近のレビュー", ...list(reviews), "",
     "## 最近更新したノート", "", "| 更新 | type | ノート | 要約 |", "|---|---|---|---|",
     ...recent.map((n) => `| ${n.updated} | ${n.type} | ${link(n)} | ${n.summary} |`),
@@ -123,6 +149,11 @@ export function buildGold(cfg: KbConfig, db: Database): string[] {
   return written;
 }
 
+/** Inline a Silver note body into Gold: drop its H1 and rebase relative .md links from the note's folder to 30_gold/. */
+function inlineBody(body: string, notePath: string): string {
+  const dir = posix.dirname(notePath);
+  return body.replace(/^\s*# .*\n/, "").replace(/\]\((?!https?:|mailto:|#)([^)\s]+\.md)\)/g, (_, href: string) => `](../${posix.normalize(posix.join(dir, href))})`);
+}
 function parse(s: string) {
   return s.split(/\s+/).filter(Boolean).map((t) => {
     const [field, value] = t.split("=");

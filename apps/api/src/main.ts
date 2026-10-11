@@ -12,7 +12,9 @@ import { cfg, reg, db, sync, head, reindex, isGitRepo, rebuildGold } from "./kb"
 import {
   createJob, getJob, listJobs, claimNextJob, appendJobLog, finishJob, requeueStale, pruneSearchJobs,
   addInboxItem, inboxItemNameExists, inboxItemsForJob, getInboxItem, markInboxFetched, addChat, listChat, newId, type JobKind,
+  addPushSubscription, deletePushSubscription, listPushSubscriptions,
 } from "./store";
+import { pushEnabled, sendPushToAll } from "./push";
 
 type Vars = { principal: Principal };
 const app = new Hono<{ Variables: Vars }>();
@@ -153,6 +155,21 @@ api.get("/gold/:name", requireUser, (c) => {
 });
 
 /** Suggestions live in 30_gold/37_suggestions.md as checklist lines with <!-- id: x --> markers. */
+// ---- Web Push: the browser subscribes here; the worker's job completion fans out (see /worker/jobs/:id/done) ----
+api.get("/push/vapid", requireUser, (c) => c.json({ publicKey: pushEnabled() ? env.vapidPublicKey : null, subscriptions: listPushSubscriptions().length }));
+api.post("/push/subscribe", requireUser, async (c) => {
+  const sub = (await c.req.json()) as { endpoint?: string; keys?: { p256dh?: string; auth?: string } };
+  if (!sub.endpoint || !sub.keys?.p256dh || !sub.keys.auth) return c.json({ error: "invalid subscription" }, 400);
+  const p = c.get("principal"); addPushSubscription(sub as { endpoint: string }, p.kind === "user" ? p.email : null, c.req.header("user-agent") ?? null);
+  return c.json({ ok: true });
+});
+api.delete("/push/subscribe", requireUser, async (c) => {
+  const { endpoint } = (await c.req.json()) as { endpoint?: string };
+  if (endpoint) deletePushSubscription(endpoint);
+  return c.json({ ok: true });
+});
+api.post("/push/test", requireUser, async (c) => c.json(await sendPushToAll({ title: "my-knowledge", body: "テスト通知です", url: "/trading", tag: "test" })));
+
 api.post("/suggestions/react", requireUser, async (c) => {
   const { id, reaction, title, type } = (await c.req.json()) as { id: string; reaction: "read" | "dismissed"; title?: string; type?: "book" | "media" };
   const abs = join(cfg.gold, "37_suggestions.md");
@@ -275,8 +292,23 @@ w.post("/jobs/:id/done", async (c) => {
   if (job?.kind === "ask") addChat("assistant", b.ok ? (b.answer ?? "") : `失敗: ${JSON.stringify(b.result)}`, id, b.sources ?? []);
   if (b.commit) await sync(`job:${id}`);
   else if (b.ok && job?.kind !== "ask" && job?.kind !== "search") await sync(`job:${id}`);
+  if (b.ok && job) notifyJobDone(job.kind, JSON.parse(job.payload) as Record<string, unknown>).catch((e) => console.error("push:", e));
   return c.json({ ok: true });
 });
+/** Push notifications for jobs people wait for. trade-plan: only when today's (JST) sheet exists, so a 休場 run stays silent. */
+async function notifyJobDone(kind: string, payload: Record<string, unknown>) {
+  if (!pushEnabled()) return;
+  if (kind === "skill" && payload.name === "trade-plan") {
+    const jst = new Date(Date.now() + 9 * 3600_000).toISOString().slice(0, 10);
+    const wanted = /date=(\d{4}-\d{2}-\d{2})/.exec(String(payload.args ?? ""))?.[1] ?? jst;
+    const plan = runQuery(db, { filters: [{ field: "type", op: "=", value: "trade_plan" }, { field: "date", op: "=", value: wanted }], limit: 1 })[0];
+    if (!plan) return;
+    const orders = Array.isArray(plan.fm.orders) ? (plan.fm.orders as { side?: string }[]) : [];
+    const acts = orders.filter((o) => o.side && o.side !== "hold").length;
+    const r = await sendPushToAll({ title: `本日の売買シート ${wanted}`, body: `${plan.summary || plan.title}${acts ? ` · 注文 ${acts} 件` : " · 注文なし"}`, url: "/trading", tag: "trade-plan" });
+    console.log(`push trade-plan ${wanted}: sent ${r.sent}, removed ${r.removed}, failed ${r.failed}`);
+  }
+}
 api.route("/worker", w);
 
 app.route("/api", api);

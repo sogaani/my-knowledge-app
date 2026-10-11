@@ -5,10 +5,12 @@ import Note from "./pages/Note";
 import Inbox from "./pages/Inbox";
 import Chat from "./pages/Chat";
 import Suggestions from "./pages/Suggestions";
+import Trading from "./pages/Trading";
 import Jobs from "./pages/Jobs";
 
 const TYPES: [string, string][] = [
   ["book", "読書"], ["media", "映画・ドラマ"], ["subscription", "サブスク"], ["finance_account", "金融"],
+  ["portfolio", "保有資産"], ["trade_plan", "売買シート"],
   ["project", "プロジェクト"], ["learning", "学習"], ["review", "レビュー"], ["person", "人物"],
 ];
 
@@ -21,6 +23,7 @@ export default function App() {
         <NavLink to="/inbox">投げ込み</NavLink>
         <NavLink to="/chat">チャット</NavLink>
         <NavLink to="/suggestions">おすすめ</NavLink>
+        <NavLink to="/trading">売買</NavLink>
         <NavLink to="/jobs">ジョブ</NavLink>
         <div className="group">ノート</div>
         {TYPES.map(([t, label]) => <NavLink key={t} to={`/notes/${t}`}>{label}</NavLink>)}
@@ -32,6 +35,7 @@ export default function App() {
           <Route path="/inbox" element={<Inbox />} />
           <Route path="/chat" element={<Chat />} />
           <Route path="/suggestions" element={<Suggestions />} />
+          <Route path="/trading" element={<Trading />} />
           <Route path="/jobs" element={<Jobs />} />
           <Route path="/notes/:type" element={<Notes />} />
           <Route path="/search" element={<Notes />} />

@@ -3,7 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { api, type Job } from "../api";
 import { Err, fmtDate, Status } from "../components/ui";
 
-const SKILLS = ["review", "kb-maintain", "subscription-audit", "finance-review", "recommend"];
+const SKILLS = ["review", "kb-maintain", "subscription-audit", "finance-review", "recommend", "trade-plan"];
 
 export default function Jobs() {
   const [jobs, setJobs] = useState<Job[]>([]);

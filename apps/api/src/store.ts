@@ -10,6 +10,7 @@ export interface Job {
   commit: string | null; created_at: string; started_at: string | null; finished_at: string | null;
 }
 export interface InboxItem { id: string; job_id: string; kind: "url" | "text" | "file"; name: string; path: string | null; url: string | null; text: string | null; created_at: string; fetched: number }
+export interface PushSubscriptionRow { endpoint: string; json: string; email: string | null; user_agent: string | null; created_at: string }
 export interface ChatMessage { id: string; role: "user" | "assistant"; text: string; sources: string; job_id: string | null; created_at: string }
 
 mkdirSync(env.dataDir, { recursive: true });
@@ -27,6 +28,9 @@ CREATE TABLE IF NOT EXISTS inbox_items (
 );
 CREATE TABLE IF NOT EXISTS chat_messages (
   id TEXT PRIMARY KEY, role TEXT NOT NULL, text TEXT NOT NULL, sources TEXT DEFAULT '[]', job_id TEXT, created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  endpoint TEXT PRIMARY KEY, json TEXT NOT NULL, email TEXT, user_agent TEXT, created_at TEXT NOT NULL
 );
 `);
 
@@ -94,4 +98,16 @@ export function addChat(role: ChatMessage["role"], text: string, jobId: string |
 }
 export function listChat(limit = 100): ChatMessage[] {
   return (store.query("SELECT * FROM chat_messages ORDER BY created_at DESC LIMIT ?").all(limit) as ChatMessage[]).reverse();
+}
+
+// ---- Web Push subscriptions (one row per browser; the endpoint is the identity) ----
+export function addPushSubscription(sub: { endpoint: string }, email: string | null, userAgent: string | null) {
+  store.run("INSERT INTO push_subscriptions(endpoint,json,email,user_agent,created_at) VALUES(?,?,?,?,?) ON CONFLICT(endpoint) DO UPDATE SET json=excluded.json, email=excluded.email, user_agent=excluded.user_agent",
+    [sub.endpoint, JSON.stringify(sub), email, userAgent, now()]);
+}
+export function listPushSubscriptions(): PushSubscriptionRow[] {
+  return store.query("SELECT endpoint,json,email,user_agent,created_at FROM push_subscriptions ORDER BY created_at").all() as PushSubscriptionRow[];
+}
+export function deletePushSubscription(endpoint: string) {
+  store.run("DELETE FROM push_subscriptions WHERE endpoint=?", [endpoint]);
 }

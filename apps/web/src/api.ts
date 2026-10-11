@@ -14,7 +14,10 @@ export interface Home {
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`/api${path}`, { ...init, headers: { "content-type": "application/json", ...(init?.headers ?? {}) } });
-  if (!res.ok) throw new Error((await res.json().catch(() => ({ error: res.statusText }))).error ?? res.statusText);
+  if (!res.ok) {
+    const b = (await res.json().catch(() => ({ error: res.statusText }))) as { error?: string; errors?: string[] };
+    throw new Error([b.error ?? res.statusText, ...(b.errors ?? [])].join(": "));
+  }
   return res.json() as Promise<T>;
 }
 export const api = {

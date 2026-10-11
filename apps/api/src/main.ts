@@ -118,12 +118,15 @@ api.patch("/notes/*", requireUser, async (c) => {
   if (!existsSync(abs)) return c.json({ error: "not found" }, 404);
   const body = (await c.req.json()) as { fm?: Record<string, unknown>; append?: { section: string; line: string } };
   const before = readFileSync(abs, "utf8");
+  // Only reject problems this request introduces: a note that already fails validation (e.g. a field hand-edited
+  // in git) must still accept an appended history line or an unrelated field change.
+  const errorsBefore = new Set(reg.validate(readNote(cfg, abs)?.fm ?? {}));
   const fm = patchFrontmatter(abs, body.fm ?? {});
   if (body.append) {
     const { appendToSection } = await import("@kb/core");
     appendToSection(abs, body.append.section, body.append.line);
   }
-  const errors = reg.validate(fm);
+  const errors = reg.validate(fm).filter((e) => !errorsBefore.has(e));
   if (errors.length) { writeFileSync(abs, before); return c.json({ error: "invalid", errors }, 422); }
   const p = c.get("principal");
   const commit = await commitKb([rel], `web: update ${rel}\n\nby ${p.kind === "user" ? p.email : p.name}`).catch((e) => ({ error: String(e) }));

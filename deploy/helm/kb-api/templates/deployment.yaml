@@ -5,6 +5,7 @@ metadata:
   labels: {{- include "kb-api.labels" . | nindent 4 }}
 spec:
   replicas: 1
+  revisionHistoryLimit: 1        # keep only the previous ReplicaSet (for `rollout undo`); the default 10 just piles up scaled-to-0 RS
   strategy: { type: Recreate }   # single PVC + sqlite: never run two at once
   selector:
     matchLabels: {{- include "kb-api.selectorLabels" . | nindent 6 }}

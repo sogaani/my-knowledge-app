@@ -1,0 +1,1 @@
+{ "name": "@kb/cli", "version": "0.1.0", "type": "module", "bin": { "kb": "./src/main.ts" }, "dependencies": { "@kb/core": "workspace:*" } }

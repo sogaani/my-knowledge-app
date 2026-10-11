@@ -1,0 +1,19 @@
+{{- if .Values.ingress.enabled }}
+# cloudflare-tunnel-ingress-controller routes this host through the tunnel and creates the DNS record.
+# Cloudflare Access on the same hostname still gates every request.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: kb-api
+  labels: {{- include "kb-api.labels" . | nindent 4 }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  rules:
+    - host: {{ .Values.ingress.host }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service: { name: kb-api, port: { name: http } }
+{{- end }}

@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: kb-api
+  labels: {{- include "kb-api.labels" . | nindent 4 }}
+spec:
+  selector: {{- include "kb-api.selectorLabels" . | nindent 4 }}
+  ports: [{ name: http, port: 80, targetPort: http }]

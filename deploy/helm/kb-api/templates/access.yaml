@@ -1,0 +1,40 @@
+{{- if .Values.access.enabled }}
+{{- $a := .Values.access }}
+# Managed by cloudflare-zero-trust-operator (cloudflare.zelic.io).
+apiVersion: cloudflare.zelic.io/v1alpha1
+kind: CloudflareServiceToken
+metadata:
+  name: {{ $a.serviceTokenName }}
+  labels: {{- include "kb-api.labels" . | nindent 4 }}
+  annotations:
+    cloudflare.zelic.io/prevent-destroy: {{ $a.preventDestroy | quote }}
+spec:
+  name: {{ $a.serviceTokenName }}
+---
+apiVersion: cloudflare.zelic.io/v1alpha1
+kind: CloudflareAccessApplication
+metadata:
+  name: kb-api
+  labels: {{- include "kb-api.labels" . | nindent 4 }}
+  annotations:
+    cloudflare.zelic.io/prevent-destroy: {{ $a.preventDestroy | quote }}
+spec:
+  name: {{ $a.appName }}
+  domain: {{ .Values.ingress.host }}
+  type: self_hosted
+  appLauncherVisible: true
+  allowedIdps: {{- toYaml $a.allowedIdps | nindent 4 }}
+  autoRedirectToIdentity: {{ $a.autoRedirectToIdentity }}
+  sessionDuration: {{ $a.sessionDuration }}
+  policies:
+    # Mac worker: service token only, no login (Service Auth).
+    - name: worker
+      decision: non_identity
+      include:
+        - serviceToken:
+            - valueFrom: { name: {{ $a.serviceTokenName }}, namespace: {{ .Release.Namespace }} }
+    - name: owner
+      decision: allow
+      include:
+        - emails: {{- toYaml $a.allowedEmails | nindent 12 }}
+{{- end }}

@@ -1,0 +1,1 @@
+{ "name": "@kb/api", "version": "0.1.0", "type": "module", "dependencies": { "@kb/core": "workspace:*", "hono": "^4.6.0", "jose": "^5.9.0" } }

@@ -1,0 +1,136 @@
+import { createHash } from "node:crypto";
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { basename, extname, join } from "node:path";
+import { today, type KbConfig } from "./config";
+
+export type BronzeKind = "web" | "note" | "mail" | "file" | "book" | "image";
+
+export interface BronzeMeta {
+  id: string;
+  kind: BronzeKind;
+  source: string; // original URL or filename
+  captured_at: string;
+  sha256: string;
+  files: string[];
+  title?: string;
+  processed_to: string[]; // silver paths
+  notes?: string;
+}
+
+const ACCESS_LOG = "access.jsonl";
+
+export function logAccess(cfg: KbConfig, event: Record<string, unknown>) {
+  mkdirSync(cfg.logs, { recursive: true });
+  appendFileSync(join(cfg.logs, ACCESS_LOG), JSON.stringify({ ts: new Date().toISOString(), ...event }) + "\n");
+}
+
+function sha256(buf: Uint8Array | string): string {
+  return createHash("sha256").update(buf).digest("hex");
+}
+
+export function guessKind(p: string): BronzeKind {
+  const e = extname(p).toLowerCase();
+  if ([".eml", ".msg"].includes(e)) return "mail";
+  if ([".epub", ".mobi"].includes(e)) return "book";
+  if ([".png", ".jpg", ".jpeg", ".heic", ".webp"].includes(e)) return "image";
+  if ([".md", ".txt"].includes(e)) return "note";
+  return "file";
+}
+
+export function bronzeDir(cfg: KbConfig, id: string): string {
+  const y = id.slice(0, 4), m = id.slice(4, 6);
+  return join(cfg.bronze, y, m, id);
+}
+
+/** Move a local file (usually from 00_inbox) into Bronze. Returns meta. */
+export function ingestFile(cfg: KbConfig, src: string, opts: { kind?: BronzeKind; keep?: boolean; title?: string; sourceLabel?: string } = {}): BronzeMeta {
+  const buf = readFileSync(src);
+  const hash = sha256(buf);
+  const kind = opts.kind ?? guessKind(src);
+  const id = `${today().replace(/-/g, "")}-${kind}-${hash.slice(0, 6)}`;
+  const dir = bronzeDir(cfg, id);
+  if (existsSync(dir)) {
+    return readMeta(cfg, id)!; // same content captured the same day: idempotent
+  }
+  mkdirSync(dir, { recursive: true });
+  const name = basename(src);
+  opts.keep ? copyFileSync(src, join(dir, name)) : renameSync(src, join(dir, name));
+  const meta: BronzeMeta = {
+    id, kind, source: opts.sourceLabel ?? name, captured_at: new Date().toISOString(), sha256: hash,
+    files: [name], title: opts.title, processed_to: [],
+  };
+  writeFileSync(join(dir, "meta.json"), JSON.stringify(meta, null, 2));
+  return meta;
+}
+
+/** Fetch a URL, store raw HTML + readable Markdown in Bronze. */
+export async function ingestUrl(cfg: KbConfig, url: string): Promise<BronzeMeta> {
+  const res = await fetch(url, { headers: { "user-agent": "my-knowledge-kb/0.1 (+personal)" } });
+  if (!res.ok) throw new Error(`fetch ${url}: ${res.status}`);
+  const html = await res.text();
+  const { htmlToMarkdown } = await import("./html");
+  const { title, markdown } = htmlToMarkdown(html, url);
+  const hash = sha256(url);
+  const id = `${today().replace(/-/g, "")}-web-${hash.slice(0, 6)}`;
+  const dir = bronzeDir(cfg, id);
+  if (existsSync(dir)) return readMeta(cfg, id)!;
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "page.html"), html);
+  writeFileSync(join(dir, "page.md"), `# ${title}\n\nSource: ${url}\n\n${markdown}`);
+  const meta: BronzeMeta = {
+    id, kind: "web", source: url, captured_at: new Date().toISOString(), sha256: sha256(html),
+    files: ["page.html", "page.md"], title, processed_to: [],
+  };
+  writeFileSync(join(dir, "meta.json"), JSON.stringify(meta, null, 2));
+  return meta;
+}
+
+export function readMeta(cfg: KbConfig, id: string): BronzeMeta | null {
+  const p = join(bronzeDir(cfg, id), "meta.json");
+  return existsSync(p) ? (JSON.parse(readFileSync(p, "utf8")) as BronzeMeta) : null;
+}
+
+export function markProcessed(cfg: KbConfig, id: string, silverPaths: string[]) {
+  const meta = readMeta(cfg, id);
+  if (!meta) return;
+  meta.processed_to = [...new Set([...meta.processed_to, ...silverPaths])];
+  writeFileSync(join(bronzeDir(cfg, id), "meta.json"), JSON.stringify(meta, null, 2));
+}
+
+/** Return meta + an excerpt (first N chars of the best text file). Logs the access. */
+export function sourceExcerpt(cfg: KbConfig, id: string, opts: { full?: boolean; chars?: number } = {}) {
+  const meta = readMeta(cfg, id);
+  if (!meta) return null;
+  const dir = bronzeDir(cfg, id);
+  const textFile = meta.files.find((f) => f.endsWith(".md")) ?? meta.files.find((f) => /\.(txt|eml|html)$/.test(f));
+  let text = "";
+  if (textFile) {
+    text = readFileSync(join(dir, textFile), "utf8");
+    if (!opts.full) text = text.slice(0, opts.chars ?? 1500);
+  }
+  logAccess(cfg, { op: "source", id, full: !!opts.full, bytes: text.length });
+  return { meta, text, truncated: !opts.full && !!textFile && statSync(join(dir, textFile)).size > text.length };
+}
+
+/** List inbox entries (files only; skips hidden). */
+export function listInbox(cfg: KbConfig): string[] {
+  if (!existsSync(cfg.inbox)) return [];
+  return readdirSync(cfg.inbox).filter((f) => !f.startsWith(".")).map((f) => join(cfg.inbox, f));
+}
+
+/** Iterate all bronze metas (for lint / prune). */
+export function* walkBronze(cfg: KbConfig): Generator<BronzeMeta> {
+  if (!existsSync(cfg.bronze)) return;
+  for (const y of readdirSync(cfg.bronze)) {
+    const yd = join(cfg.bronze, y);
+    if (!statSync(yd).isDirectory()) continue;
+    for (const m of readdirSync(yd)) {
+      const md = join(yd, m);
+      if (!statSync(md).isDirectory()) continue;
+      for (const id of readdirSync(md)) {
+        const meta = readMeta(cfg, id);
+        if (meta) yield meta;
+      }
+    }
+  }
+}

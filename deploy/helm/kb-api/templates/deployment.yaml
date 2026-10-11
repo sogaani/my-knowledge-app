@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kb-api
+  labels: {{- include "kb-api.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy: { type: Recreate }   # single PVC + sqlite: never run two at once
+  selector:
+    matchLabels: {{- include "kb-api.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "kb-api.selectorLabels" . | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: api
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports: [{ name: http, containerPort: 8787 }]
+          envFrom:
+            - configMapRef: { name: kb-api }
+            - secretRef: { name: {{ .Values.secrets.api }} }
+          {{- if .Values.access.enabled }}
+          env:
+            # Service-token JWTs carry the Client ID in common_name; take it from the operator's Secret.
+            - name: WORKER_SERVICE_TOKEN_NAME
+              valueFrom: { secretKeyRef: { name: {{ .Values.access.serviceTokenName }}, key: cloudflareClientId } }
+          {{- end }}
+          volumeMounts:
+            - { name: data, mountPath: /data }
+            - { name: ssh, mountPath: /secrets/ssh, readOnly: true }
+            - { name: git-crypt, mountPath: /secrets/git-crypt, readOnly: true }
+          readinessProbe: { httpGet: { path: /healthz, port: http }, initialDelaySeconds: 10 }
+          livenessProbe: { httpGet: { path: /healthz, port: http }, periodSeconds: 30 }
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: kb-data }
+        - name: ssh
+          secret: { secretName: {{ .Values.secrets.git }}, defaultMode: 0400 }
+        - name: git-crypt
+          secret: { secretName: {{ .Values.secrets.gitCrypt }}, defaultMode: 0400 }

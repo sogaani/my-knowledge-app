@@ -1,0 +1,18 @@
+{
+  "name": "my-knowledge-app",
+  "private": true,
+  "workspaces": ["packages/*", "apps/*"],
+  "scripts": {
+    "kb": "bun run apps/cli/src/main.ts",
+    "api": "bun run --watch apps/api/src/main.ts",
+    "worker": "bun run apps/worker/src/main.ts",
+    "web": "bun run --cwd apps/web dev",
+    "build:web": "bun run --cwd apps/web build",
+    "test": "bun test",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.0",
+    "typescript": "^5.6.0"
+  }
+}

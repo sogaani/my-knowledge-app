@@ -55,7 +55,7 @@ kubectl -n my-knowledge rollout restart deploy/kb-api
 2. If this repo is private, add it to Argo CD (Settings → Repositories, or `argocd repo add https://github.com/sogaani/my-knowledge-app.git --username sogaani --password <PAT>`).
 3. Register the app once:
    ```
-   kubectl apply -n argocd -f deploy/argocd/application.yaml
+   kubectl apply -n tomorrow -f deploy/argocd/application.yaml
    argocd app get kb-api
    kubectl -n my-knowledge logs deploy/kb-api -f
    ```

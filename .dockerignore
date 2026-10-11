@@ -1,0 +1,10 @@
+# Keep host artifacts and secrets out of the build context.
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+**/.env
+**/.env.*
+!**/.env.example
+.git
+.local
+**/.DS_Store

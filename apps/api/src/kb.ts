@@ -22,11 +22,14 @@ export async function sync(reason: string): Promise<{ changed: boolean; head: st
   syncing = (async () => {
     try {
       if (isGitRepo) {
+        // The index DB lives in an emptyDir and is empty on every start: the first sync must always index,
+        // even when the pull brings nothing new (this used to be checked after lastHead was already set).
+        const first = !lastHead;
         const { before, after } = await gitPull(cfg.root);
         lastHead = after;
-        if (before !== after || !lastHead) {
-          const r = reindex();
-          console.log(`[sync:${reason}] ${before.slice(0, 7)} -> ${after.slice(0, 7)}`, r);
+        if (before !== after || first) {
+          const r = reindex(first);
+          console.log(`[sync:${reason}] ${before.slice(0, 7)} -> ${after.slice(0, 7)}${first ? " (full)" : ""}`, r);
           return { changed: true, head: after };
         }
         return { changed: false, head: after };

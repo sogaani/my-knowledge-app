@@ -83,8 +83,16 @@ cp apps/worker/.env.example apps/worker/.env   # KB_API_URL, WORKER_TOKEN, CF_AC
 kubectl -n my-knowledge get secret kb-worker -o jsonpath='{.data.cloudflareClientId}' | base64 -d    # → CF_ACCESS_CLIENT_ID
 kubectl -n my-knowledge get secret kb-worker -o jsonpath='{.data.cloudflareSecretKey}' | base64 -d   # → CF_ACCESS_CLIENT_SECRET
 kubectl -n my-knowledge get secret kb-api -o jsonpath='{.data.WORKER_TOKEN}' | base64 -d             # → WORKER_TOKEN
-bun run worker            # or install the launchd agent: deploy/launchd/install.sh
+bun run worker            # try it in the foreground first
 ```
+Keep it running with launchd (starts at login, restarts if it dies):
+```
+deploy/launchd/install.sh                              # run from a shell where claude/codex/gemini, git, git-crypt are on PATH
+tail -f ~/Library/Logs/kb-worker.log
+launchctl kickstart -k gui/$(id -u)/local.kb-worker    # restart after editing .env or pulling new code
+deploy/launchd/install.sh uninstall
+```
+The plist copies the shell's `PATH` at install time (launchd's own is bare): rerun `install.sh` after installing a new agent CLI or moving the repo.
 
 ## Notes
 - Data updates never redeploy the Pod: the worker reports a commit, the API `git pull`s and re-indexes. A 5-minute `git fetch` catches manual pushes.

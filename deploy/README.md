@@ -5,7 +5,8 @@ Browser ─Cloudflare Access (Google)─▶ Tunnel ─▶ cloudflare-tunnel-ingr
                                                                       /data     kb-data  (NFS)        kb: git clone, git-crypt unlocked
                                                                       /data/app kb-state (local-path) jobs.sqlite, staging
                                                                       /cache    emptyDir             kb.sqlite (note index, rebuilt on start)
-Mac worker ─Access service token + WORKER_TOKEN─▶ https://kb.wanawata.com/api/worker/*
+Mac worker ─Access service token + WORKER_TOKEN─▶ https://kb.wanawata.com/api/worker/*  (+ POST /api/jobs for launchd schedules)
+Gmail GAS  ─Access service token kb-ingest + INGEST_TOKEN─▶ https://kb.wanawata.com/api/inbox  (push only)
 ```
 
 | Path | |
@@ -24,15 +25,18 @@ kubectl create namespace my-knowledge
   `kubectl -n my-knowledge create secret generic kb-git --from-file=deploy_key`
 - **git-crypt key**: on the Mac, in the data repo, `git-crypt export-key ./git-crypt.key` (store the same file in 1Password).
   `kubectl -n my-knowledge create secret generic kb-git-crypt --from-file=key=git-crypt.key`
-- **API secret**: `kubectl -n my-knowledge create secret generic kb-api --from-literal=WORKER_TOKEN=$(openssl rand -hex 32) --from-literal=CF_ACCESS_AUD=pending` (set the real AUD after the first sync, see §2)
+- **API secret**: `kubectl -n my-knowledge create secret generic kb-api --from-literal=WORKER_TOKEN=$(openssl rand -hex 32) --from-literal=INGEST_TOKEN=$(openssl rand -hex 32) --from-literal=CF_ACCESS_AUD=pending` (set the real AUD after the first sync, see §2)
+  - Existing cluster: `kubectl -n my-knowledge patch secret kb-api --type merge -p '{"stringData":{"INGEST_TOKEN":"'"$(openssl rand -hex 32)"'"}}' && kubectl -n my-knowledge rollout restart deploy/kb-api`
 - **GHCR pull secret** (only if the package is private): `kubectl -n my-knowledge create secret docker-registry ghcr --docker-server=ghcr.io --docker-username=sogaani --docker-password=<PAT with read:packages>`, then set `imagePullSecrets: [{ name: ghcr }]` in values.
 
 ## 2. Cloudflare Access
 The cluster's [cloudflare-zero-trust-operator](https://github.com/BojanZelic/cloudflare-zero-trust-operator) creates everything from `templates/access.yaml`:
-- `CloudflareAccessApplication` `my-knowledge` on `kb.wanawata.com` with two policies:
-  - `worker` (Service Auth / `non_identity`): the `kb-worker` service token, no login.
+- `CloudflareAccessApplication` `my-knowledge` on `kb.wanawata.com` with three policies (created in this order; a failure stops at that policy, so `owner` is always protected first):
   - `owner` (allow): `access.allowedEmails` (only `soga.ani@gmail.com`). The same list becomes the API's `ALLOWED_EMAILS`.
+  - `worker` (Service Auth / `non_identity`): the `kb-worker` service token, no login.
+  - `ingest` (Service Auth / `non_identity`): the `kb-ingest` service token used by the Gmail Apps Script.
 - `CloudflareServiceToken` `kb-worker` → Secret `kb-worker` (`cloudflareClientId`, `cloudflareSecretKey`). The pod reads the Client ID from it as `WORKER_SERVICE_TOKEN_NAME`.
+- `CloudflareServiceToken` `kb-ingest` → Secret `kb-ingest` (same keys). The pod reads the Client ID as `INGEST_SERVICE_TOKEN_NAME` (optional, so the rollout never waits on it).
 
 Both carry `cloudflare.zelic.io/prevent-destroy: "true"`, so deleting the Argo app leaves them in Cloudflare.
 
@@ -57,7 +61,16 @@ kubectl -n my-knowledge rollout restart deploy/kb-api
 ### How the worker authenticates
 1. The Mac worker sends `CF-Access-Client-Id` / `CF-Access-Client-Secret` (the `kb-worker` token) and `Authorization: Bearer $WORKER_TOKEN`.
 2. Cloudflare Access matches the `worker` policy and forwards the request with a signed `Cf-Access-Jwt-Assertion` whose `common_name` is the token's Client ID.
-3. The API (`apps/api/src/auth.ts`) verifies the JWT against the team's JWKS (issuer + `CF_ACCESS_AUD`), checks `common_name` == `WORKER_SERVICE_TOKEN_NAME`, then requires the matching `WORKER_TOKEN`. Worker routes reject users with 403.
+3. The API (`apps/api/src/auth.ts`) verifies the JWT against the team's JWKS (issuer + `CF_ACCESS_AUD`), checks `common_name` == `WORKER_SERVICE_TOKEN_NAME`, then requires the matching `WORKER_TOKEN`. Worker routes reject users with 403. The worker may also `POST /api/jobs` (that is how the launchd schedules in the data repo enqueue `ingest` / `skill` runs via `90_system/scripts/enqueue.sh`).
+
+### How the Gmail pusher (Apps Script) authenticates
+Same three steps with the `kb-ingest` token and `Authorization: Bearer $INGEST_TOKEN`; the JWT's `common_name` must equal `INGEST_SERVICE_TOKEN_NAME`. The resulting principal is `service`, which is accepted **only** by `POST /api/inbox` (every other route answers 403), so a leaked script property cannot read notes, claim jobs or trigger syncs. Paste these into the Apps Script project (Project Settings → Script Properties), see `my-knowledge/90_system/gas/emailfilter/README.md`:
+```
+kubectl -n my-knowledge get secret kb-ingest -o jsonpath='{.data.cloudflareClientId}' | base64 -d    # → CF_ACCESS_CLIENT_ID
+kubectl -n my-knowledge get secret kb-ingest -o jsonpath='{.data.cloudflareSecretKey}' | base64 -d   # → CF_ACCESS_CLIENT_SECRET
+kubectl -n my-knowledge get secret kb-api -o jsonpath='{.data.INGEST_TOKEN}' | base64 -d             # → INGEST_TOKEN
+```
+Smoke test from a shell: `curl -s https://kb.wanawata.com/api/me -H "CF-Access-Client-Id: $ID" -H "CF-Access-Client-Secret: $SECRET" -H "Authorization: Bearer $INGEST_TOKEN"` → `{"principal":{"kind":"service",…}}`; the same headers on `GET /api/jobs` → 403. `POST /api/inbox` with files already staged under the same name answers 200 with `job: null` and `skipped: [...]`, so the pusher can label them as done.
 
 ## 3. Argo CD
 1. Edit `deploy/helm/kb-api/values.yaml` if needed (`persistence.storageClass`). Commit and push.

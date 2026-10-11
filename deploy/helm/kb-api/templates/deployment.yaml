@@ -32,6 +32,9 @@ spec:
             # Service-token JWTs carry the Client ID in common_name; take it from the operator's Secret.
             - name: WORKER_SERVICE_TOKEN_NAME
               valueFrom: { secretKeyRef: { name: {{ .Values.access.serviceTokenName }}, key: cloudflareClientId } }
+            # optional: the pod must not block on the operator creating this second token; empty = service principal disabled
+            - name: INGEST_SERVICE_TOKEN_NAME
+              valueFrom: { secretKeyRef: { name: {{ .Values.access.ingestServiceTokenName }}, key: cloudflareClientId, optional: true } }
           {{- end }}
           volumeMounts:
             - { name: data, mountPath: /data }

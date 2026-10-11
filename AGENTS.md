@@ -11,7 +11,7 @@
 | `packages/core` (`@kb/core`) | ノート・frontmatter・SQLite 索引・LanceDB 検索・Gold 生成などの処理ロジック全部 | 共通 |
 | `apps/cli` (`@kb/cli`) | `kb` コマンド。core を呼ぶだけの薄い層 | Mac |
 | `apps/worker` | API のジョブ（ingest / ask / recommend / search）を long-poll してエージェント CLI や core で処理 | Mac |
-| `apps/api` | Hono の HTTP API。Cloudflare Access（JWT）で認証。ジョブキューは SQLite | k8s |
+| `apps/api` | Hono の HTTP API。Cloudflare Access（JWT）で認証。principal は `user`（WebUI）/ `worker`（Mac、`/api/worker/*` と `POST /api/jobs`）/ `service`（Gmail の Apps Script、`POST /api/inbox` のみ）。ジョブキューは SQLite | k8s |
 | `apps/web` | React + Vite の WebUI | k8s（API が配信） |
 | `deploy/` | Dockerfile・Helm chart（`helm/kb-api`）・Argo CD Application・手順（`deploy/README.md`） | — |
 | `docs/` | 設計メモ（`search.md` = 検索の設計と運用） | — |
@@ -35,7 +35,7 @@
 ## 4. 機微情報
 
 - データリポジトリの 22/23/27 ドメインは git-crypt で暗号化されている。テスト fixture・ログ・エラーメッセージにその内容を出さない。
-- トークン・鍵（`WORKER_TOKEN`, deploy key, git-crypt key, Access のサービストークン）はコミットしない。k8s Secret と 1Password に置く。
+- トークン・鍵（`WORKER_TOKEN`, `INGEST_TOKEN`, deploy key, git-crypt key, Access のサービストークン）はコミットしない。k8s Secret と 1Password に置く。
 
 ## 5. スキル
 

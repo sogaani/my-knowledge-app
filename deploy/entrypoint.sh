@@ -13,8 +13,19 @@ fi
 cd "$KB_ROOT"
 git config user.name "${GIT_USER_NAME:-kb-web}"
 git config user.email "${GIT_USER_EMAIL:-kb-web@local}"
-if [ -f /secrets/git-crypt/key ] && ! git-crypt status -e 2>/dev/null | grep -q .; then
-  git-crypt unlock /secrets/git-crypt/key || echo "git-crypt unlock failed (repo may not be encrypted yet)"
+# Unlock once per clone. `git-crypt unlock` stores the key under .git/git-crypt/keys/ and that survives on the PVC;
+# testing `git-crypt status -e` here was wrong (it lists encrypted paths whether or not the repo is unlocked, so an
+# already-encrypted repo was never unlocked and 22/23/27 + the encrypted Gold views stayed unreadable to the API).
+if [ -f /secrets/git-crypt/key ]; then
+  if [ -f .git/git-crypt/keys/default ]; then
+    echo "git-crypt: already unlocked"
+  elif git-crypt unlock /secrets/git-crypt/key; then
+    echo "git-crypt: unlocked"
+  else
+    echo "git-crypt: unlock FAILED; encrypted notes (22/23/27, Gold 32/33) will be missing from the index" >&2
+  fi
+else
+  echo "git-crypt: no key mounted; encrypted notes will be missing from the index" >&2
 fi
 cd /app
 exec "$@"

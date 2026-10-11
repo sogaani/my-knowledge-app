@@ -92,6 +92,44 @@ export function buildGold(cfg: KbConfig, db: Database): string[] {
     out("37_suggestions.md", "# おすすめ\n\n（`recommend` スキルがここを更新します）\n");
   }
 
+  // 30 market: catalyst calendar + stock / theme lists (20_market is not encrypted: no amounts or quantities here)
+  {
+    const stocks = q("type=stock").filter((n) => n.status !== "dropped");
+    const themes = q("type=theme").filter((n) => n.status !== "closed");
+    const day = (d: string) => Math.round((new Date(d).getTime() - new Date(today()).getTime()) / 86400000);
+    const ev: { date: string; who: string; label: string; days: number }[] = [];
+    const push = (n: QueryResult, date: unknown, label: string) => {
+      const d = String(date ?? "");
+      if (/^\d{4}-\d{2}-\d{2}$/.test(d)) ev.push({ date: d, who: link(n), label, days: day(d) });
+    };
+    for (const n of stocks) {
+      push(n, n.fm.next_earnings, "決算発表");
+      for (const e of (Array.isArray(n.fm.events) ? n.fm.events : []) as { date?: string; label?: string }[]) if (e.label !== "決算発表" || e.date !== n.fm.next_earnings) push(n, e.date, String(e.label ?? ""));
+    }
+    for (const n of themes) for (const e of (Array.isArray(n.fm.events) ? n.fm.events : []) as { date?: string; label?: string }[]) push(n, e.date, String(e.label ?? ""));
+    const upcoming = ev.filter((e) => e.days >= -7 && e.days <= 42).sort((a, b) => a.date.localeCompare(b.date));
+    const codeOf = (n: QueryResult) => String(n.fm.code ?? "");
+    const byStatus = group(stocks, (n) => n.status);
+    const stockRows = (xs: QueryResult[]) => xs.sort((a, b) => codeOf(a).localeCompare(codeOf(b))).map((n) =>
+      `| ${codeOf(n)} | ${link(n)} | ${n.fm.market ?? ""} | ${n.fm.sector ?? ""} | ${n.fm.next_earnings ?? ""} | ${n.fm.thesis ?? n.summary} |`);
+    out("30_market.md", [
+      "# 市場メモ", "",
+      "銘柄ノート（`stock`）とテーマノート（`theme`）の入口。`market-scan` が週次で更新し、`trade-plan` が毎朝読む。", "",
+      "## カタリスト・カレンダー（過去 1 週間〜今後 6 週間）", "",
+      "| 日付 | あと | 銘柄 / テーマ | 内容 |", "|---|---|---|---|",
+      ...(upcoming.length ? upcoming.map((e) => `| ${e.date} | ${e.days < 0 ? `${-e.days} 日前` : e.days === 0 ? "今日" : `${e.days} 日`} | ${e.who} | ${e.label} |`) : ["| | | （なし） | |"]),
+      "", "## 保有銘柄", "",
+      "| コード | 銘柄 | 市場 | セクター | 次回決算 | 論拠 |", "|---|---|---|---|---|---|",
+      ...(stockRows(byStatus.holding ?? []).length ? stockRows(byStatus.holding ?? []) : ["| | （なし） | | | | |"]),
+      "", "## 監視銘柄", "",
+      "| コード | 銘柄 | 市場 | セクター | 次回決算 | 論拠 |", "|---|---|---|---|---|---|",
+      ...(stockRows(byStatus.watch ?? []).length ? stockRows(byStatus.watch ?? []) : ["| | （なし） | | | | |"]),
+      "", "## テーマ", "",
+      "| テーマ | 段階 | 状態 | 関連銘柄 | 要約 |", "|---|---|---|---|---|",
+      ...(themes.length ? themes.map((n) => `| ${link(n)} | ${n.fm.stage ?? ""} | ${n.status} | ${(Array.isArray(n.fm.tickers) ? n.fm.tickers : []).join(", ")} | ${n.summary} |`) : ["| （なし） | | | | |"]),
+    ].join("\n"));
+  }
+
   // 38 trading: latest trade_plan sheet + index of recent sheets + portfolio snapshot (git-crypt encrypted in the data repo)
   const plans = q("type=trade_plan", { orderBy: "-date", limit: 30 });
   const ports = q("type=portfolio");
@@ -130,7 +168,8 @@ export function buildGold(cfg: KbConfig, db: Database): string[] {
     `- [プロジェクト](36_projects.md) — 進行中 ${pBy.active?.length ?? 0}`,
     "- [学習](31_learning/index.md)",
     "- [おすすめ](37_suggestions.md)",
-    `- [売買シート](38_trading.md)${plans.length ? ` — 最新 ${plans[0].fm.date ?? plans[0].updated}` : ""}`, "",
+    `- [売買シート](38_trading.md)${plans.length ? ` — 最新 ${plans[0].fm.date ?? plans[0].updated}` : ""}`,
+    "- [市場メモ](30_market.md) — 銘柄・テーマ・カタリスト", "",
     "## 最近のレビュー", ...list(reviews), "",
     "## 最近更新したノート", "", "| 更新 | type | ノート | 要約 |", "|---|---|---|---|",
     ...recent.map((n) => `| ${n.updated} | ${n.type} | ${link(n)} | ${n.summary} |`),

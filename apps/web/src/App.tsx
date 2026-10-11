@@ -10,7 +10,7 @@ import Jobs from "./pages/Jobs";
 
 const TYPES: [string, string][] = [
   ["book", "読書"], ["media", "映画・ドラマ"], ["subscription", "サブスク"], ["finance_account", "金融"],
-  ["portfolio", "保有資産"], ["trade_plan", "売買シート"],
+  ["portfolio", "保有資産"], ["trade_plan", "売買シート"], ["stock", "銘柄"], ["theme", "投資テーマ"],
   ["project", "プロジェクト"], ["learning", "学習"], ["review", "レビュー"], ["person", "人物"],
 ];
 
@@ -24,6 +24,7 @@ export default function App() {
         <NavLink to="/chat">チャット</NavLink>
         <NavLink to="/suggestions">おすすめ</NavLink>
         <NavLink to="/trading">売買</NavLink>
+        <NavLink to="/note/30_gold/30_market.md">市場メモ</NavLink>
         <NavLink to="/jobs">ジョブ</NavLink>
         <div className="group">ノート</div>
         {TYPES.map(([t, label]) => <NavLink key={t} to={`/notes/${t}`}>{label}</NavLink>)}

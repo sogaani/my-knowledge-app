@@ -1,40 +1,34 @@
 image:
   repository: ghcr.io/sogaani/my-knowledge-app
   # Rewritten to the commit sha by .github/workflows/image.yml on every push to main; Argo CD rolls it out.
-  tag: latest
+  tag: e7c578822406fc699bbe02b8c1f1fbfdbcda5723
   pullPolicy: IfNotPresent
-
-imagePullSecrets: []   # e.g. [{ name: ghcr }] if the GHCR package is private
-
+imagePullSecrets: [] # e.g. [{ name: ghcr }] if the GHCR package is private
 ingress:
   enabled: true
   className: cloudflare-tunnel
   host: kb.wanawata.com
-
 persistence:
   size: 5Gi
-  storageClass: ""     # empty = cluster default
-
+  storageClass: "" # empty = cluster default
 # Cloudflare Access app + worker service token, managed by cloudflare-zero-trust-operator.
 access:
   enabled: true
   appName: my-knowledge
   # Only these Google accounts get in (Access policy and the API's own ALLOWED_EMAILS check).
   allowedEmails: [soga.ani@gmail.com]
-  allowedIdps: []                 # IdP ids; empty = every login method in the account
-  autoRedirectToIdentity: false   # true needs exactly one entry in allowedIdps
+  allowedIdps: [] # IdP ids; empty = every login method in the account
+  autoRedirectToIdentity: false # true needs exactly one entry in allowedIdps
   sessionDuration: 24h
   # CloudflareServiceToken for the Mac worker; the operator writes Secret <name> (cloudflareClientId / cloudflareSecretKey).
   serviceTokenName: kb-worker
   # Keep the Cloudflare objects if the CRs are deleted (an Argo prune must not unprotect the app or rotate the token).
   preventDestroy: true
-
 # Created out of band (see deploy/README.md). The chart only references them.
 secrets:
-  api: kb-api          # WORKER_TOKEN, CF_ACCESS_AUD
-  git: kb-git          # deploy_key
-  gitCrypt: kb-git-crypt   # key
-
+  api: kb-api # WORKER_TOKEN, CF_ACCESS_AUD
+  git: kb-git # deploy_key
+  gitCrypt: kb-git-crypt # key
 config:
   KB_GIT_URL: "git@github.com:sogaani/my-knowledge.git"
   KB_GIT_BRANCH: "main"
@@ -44,7 +38,6 @@ config:
   # The pod has no Ollama/LanceDB index: never embed here; semantic search is delegated to the Mac worker.
   KB_EMBED: "off"
   SEARCH_TIMEOUT_MS: "8000"
-
 resources:
-  requests: { cpu: 50m, memory: 128Mi }
-  limits: { memory: 512Mi }
+  requests: {cpu: 50m, memory: 128Mi}
+  limits: {memory: 512Mi}

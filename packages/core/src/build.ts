@@ -35,6 +35,10 @@ export function buildGold(cfg: KbConfig, db: Database): string[] {
     "# 金融サービス", "",
     "| 機関 | 種別 | 用途 | 制度 | 見直し予定 | 状態 |", "|---|---|---|---|---|---|",
     ...accts.map((a) => `| ${link(a)} | ${a.fm.kind ?? ""} | ${a.fm.purpose ?? ""} | ${a.fm.tax_scheme ?? ""} | ${a.fm.review_due ?? ""} | ${a.status} |`),
+    "", "## 月次台帳", "",
+    "| 月 | 合計 | 状態 | 要約 |", "|---|---|---|---|",
+    ...q("type=ledger").sort((a, b) => String(b.fm.month ?? "").localeCompare(String(a.fm.month ?? "")))
+      .map((l) => `| ${link(l)} | ¥${Math.round(Number(l.fm.total ?? 0)).toLocaleString()} | ${l.status} | ${l.summary ?? ""} |`),
   ].join("\n"));
 
   // 34 books

@@ -1,7 +1,7 @@
 image:
   repository: ghcr.io/sogaani/my-knowledge-app
   # Rewritten to the commit sha by .github/workflows/image.yml on every push to main; Argo CD rolls it out.
-  tag: a2c1ac01c8336050afb513d4f14062827fd3bbca
+  tag: 0a5ac98ca4ebd3bedc3e3f5d954e3775442cd551
   pullPolicy: IfNotPresent
 imagePullSecrets: [] # e.g. [{ name: ghcr }] if the GHCR package is private
 ingress:

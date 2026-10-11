@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync, unlinkSync } from "node:fs";
 import { basename, extname, join } from "node:path";
 import { today, type KbConfig } from "./config";
 
@@ -51,7 +51,10 @@ export function ingestFile(cfg: KbConfig, src: string, opts: { kind?: BronzeKind
   const id = `${today().replace(/-/g, "")}-${kind}-${hash.slice(0, 6)}`;
   const dir = bronzeDir(cfg, id);
   if (existsSync(dir)) {
-    return readMeta(cfg, id)!; // same content captured the same day: idempotent
+    // same content captured the same day: idempotent. Drop the inbox copy too, or `kb inbox` keeps listing it forever
+    // (a re-run ingest job re-stages the same files).
+    if (!opts.keep) unlinkSync(src);
+    return readMeta(cfg, id)!;
   }
   mkdirSync(dir, { recursive: true });
   const name = basename(src);

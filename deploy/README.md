@@ -2,14 +2,16 @@
 
 ```
 Browser ─Cloudflare Access (Google)─▶ Tunnel ─▶ cloudflare-tunnel-ingress-controller ─▶ kb-api Service ─▶ kb-api Pod
-                                                                      PVC /data: kb (git clone, git-crypt unlocked), app/jobs.sqlite, app/staging
+                                                                      /data     kb-data  (NFS)        kb: git clone, git-crypt unlocked
+                                                                      /data/app kb-state (local-path) jobs.sqlite, staging
+                                                                      /cache    emptyDir             kb.sqlite (note index, rebuilt on start)
 Mac worker ─Access service token + WORKER_TOKEN─▶ https://kb.wanawata.com/api/worker/*
 ```
 
 | Path | |
 |---|---|
 | `deploy/Dockerfile`, `entrypoint.sh` | Image (built to GHCR by `.github/workflows/image.yml`) |
-| `deploy/helm/kb-api/` | Helm chart: Deployment, Service, Ingress, ConfigMap, PVC, Cloudflare Access app + service token (cloudflare-zero-trust-operator CRs) |
+| `deploy/helm/kb-api/` | Helm chart: Deployment, Service, Ingress, ConfigMap, PVCs, Cloudflare Access app + service token (cloudflare-zero-trust-operator CRs) |
 | `deploy/argocd/application.yaml` | Argo CD Application that syncs the chart from `main` |
 
 Rollout: push to `main` → CI builds `ghcr.io/sogaani/my-knowledge-app:<sha>` → CI commits that sha into `deploy/helm/kb-api/values.yaml` → Argo CD syncs.
@@ -73,7 +75,7 @@ Render locally: `helm template kb-api deploy/helm/kb-api -n my-knowledge`.
 - Delete the hand-made Access application and `kb-worker` service token in the dashboard; the operator creates its own (new Client ID/Secret → update the Mac `.env`).
 - The Deployment selector changed (`app: kb-api` → `app.kubernetes.io/*`) and selectors are immutable: `kubectl -n my-knowledge delete deploy/kb-api` before the first sync.
 - Remove the private connector: `kubectl -n my-knowledge delete deploy/cloudflared secret/cloudflared`, and delete the old public hostname from that tunnel in the Cloudflare dashboard (the ingress controller recreates it on its own tunnel).
-- The `kb-data` PVC keeps its name, so Argo adopts it with the cloned repo and sqlite intact.
+- The `kb-data` PVC keeps its name, so Argo adopts it with the cloned repo intact. Old SQLite files on it (`app/jobs.sqlite*`, `kb/90_system/cache/kb.sqlite*`) are no longer used and can be deleted.
 
 ## 4. Mac worker
 ```
@@ -87,8 +89,10 @@ bun run worker            # or install the launchd agent: deploy/launchd/install
 ## Notes
 - Data updates never redeploy the Pod: the worker reports a commit, the API `git pull`s and re-indexes. A 5-minute `git fetch` catches manual pushes.
 - On the first sync the pod sits in `CreateContainerConfigError` until the operator has written Secret `kb-worker`; it starts on its own once it exists.
-- `strategy: Recreate` — the SQLite files on the PVC must not be opened by two Pods.
-- The PVC is annotated `helm.sh/resource-policy: keep` and `argocd.argoproj.io/sync-options: Delete=false`: deleting the Argo app leaves the data.
+- SQLite never lives on NFS: the `nfs-client` mount (NFSv3, server-side locking) can't take SQLite's file locks, so it fails with `SQLITE_BUSY` in any journal mode. `jobs.sqlite` is on the `local-path` PVC `kb-state`; the index `kb.sqlite` is in an emptyDir (`KB_DB=/cache/kb.sqlite`).
+- `kb-state` is node-local: the Pod is pinned to the node that holds it. If that node is gone, the job/chat history is lost (notes are safe in git); delete the PVC and the Pod starts fresh elsewhere.
+- `strategy: Recreate` — the SQLite files must not be opened by two Pods.
+- The PVCs are annotated `helm.sh/resource-policy: keep` and `argocd.argoproj.io/sync-options: Delete=false`: deleting the Argo app leaves the data.
 - ConfigMap changes restart the Pod (`checksum/config`). Secret changes don't: `kubectl -n my-knowledge rollout restart deploy/kb-api` after rotating the git-crypt key or deploy key.
 - Roll back by reverting the tag-bump commit (or `argocd app rollback kb-api`, which pauses auto-sync).
 

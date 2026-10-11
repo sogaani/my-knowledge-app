@@ -9,8 +9,17 @@ ingress:
   className: cloudflare-tunnel
   host: kb.wanawata.com
 persistence:
-  size: 5Gi
-  storageClass: "" # empty = cluster default
+  # /data: git clone of the data repo. NFS is fine for git.
+  repo:
+    size: 5Gi
+    storageClass: "" # empty = cluster default (nfs-client)
+  # /data/app: jobs.sqlite + staging inbox. SQLite needs working file locks, which the NFS mount lacks: use node-local disk.
+  # The pod is then pinned to the node holding this volume.
+  state:
+    size: 1Gi
+    storageClass: local-path
+  # kb.sqlite (note index) lives in an emptyDir and is rebuilt from the notes on every start.
+  indexSizeLimit: 1Gi
 # Cloudflare Access app + worker service token, managed by cloudflare-zero-trust-operator.
 access:
   enabled: true

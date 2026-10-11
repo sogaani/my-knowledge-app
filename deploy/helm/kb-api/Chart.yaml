@@ -2,5 +2,5 @@ apiVersion: v2
 name: kb-api
 description: my-knowledge API + WebUI (Hono on Bun), exposed through cloudflare-tunnel-ingress-controller
 type: application
-version: 0.2.0
+version: 0.3.0
 appVersion: "main"

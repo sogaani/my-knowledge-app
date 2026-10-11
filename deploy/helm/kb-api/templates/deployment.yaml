@@ -25,14 +25,18 @@ spec:
           envFrom:
             - configMapRef: { name: kb-api }
             - secretRef: { name: {{ .Values.secrets.api }} }
-          {{- if .Values.access.enabled }}
           env:
+            # SQLite can't lock on the NFS volume: keep the note index off /data.
+            - { name: KB_DB, value: /cache/kb.sqlite }
+          {{- if .Values.access.enabled }}
             # Service-token JWTs carry the Client ID in common_name; take it from the operator's Secret.
             - name: WORKER_SERVICE_TOKEN_NAME
               valueFrom: { secretKeyRef: { name: {{ .Values.access.serviceTokenName }}, key: cloudflareClientId } }
           {{- end }}
           volumeMounts:
             - { name: data, mountPath: /data }
+            - { name: state, mountPath: /data/app }   # DATA_DIR: jobs.sqlite, staging (local disk, not NFS)
+            - { name: index, mountPath: /cache }      # KB_DB: rebuilt from the notes on start
             - { name: ssh, mountPath: /secrets/ssh, readOnly: true }
             - { name: git-crypt, mountPath: /secrets/git-crypt, readOnly: true }
           readinessProbe: { httpGet: { path: /healthz, port: http }, initialDelaySeconds: 10 }
@@ -41,6 +45,10 @@ spec:
       volumes:
         - name: data
           persistentVolumeClaim: { claimName: kb-data }
+        - name: state
+          persistentVolumeClaim: { claimName: kb-state }
+        - name: index
+          emptyDir: { sizeLimit: {{ .Values.persistence.indexSizeLimit }} }
         - name: ssh
           secret: { secretName: {{ .Values.secrets.git }}, defaultMode: 0400 }
         - name: git-crypt

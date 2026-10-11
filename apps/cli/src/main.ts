@@ -77,7 +77,7 @@ switch (cmd) {
     const { pos } = flags(argv);
     const [path] = pos;
     if (!path) die("usage: kb set <path> --set k=v [--set k=v]");
-    const fm = patchFrontmatter(join(cfg.root, path), collectSets(argv));
+    const fm = patchFrontmatter(join(cfg.root, path), collectSets(argv), reg);
     const errs = reg.validate(fm);
     if (errs.length) die(`written, but frontmatter is now invalid:\n  ${errs.join("\n  ")}`);
     json(fm);

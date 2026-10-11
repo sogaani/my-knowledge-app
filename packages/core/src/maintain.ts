@@ -30,7 +30,7 @@ export function validateAll(cfg: KbConfig, reg: SchemaRegistry): Issue[] {
       else if (!readMeta(cfg, s)) issues.push({ level: "warn", path: n.path, msg: `Bronze ${s} not present on this machine` });
     }
     const text = readFileSync(n.absPath, "utf8");
-    if (/(^|[^0-9-])[0-9]{7,}([^0-9-]|$)/.test(text.replace(/isbn:.*|sha256.*|\d{8}-[a-z]+-[0-9a-f]{6}|^\s*(total|total_value|buying_power|cash_jpy|cash_usd|margin_deposit|fx_usdjpy|positions):\s*-?[\d.]+\s*$/gim, ""))) {
+    if (/(^|[^0-9-])[0-9]{7,}([^0-9-]|$)/.test(text.replace(/https?:\/\/[^\s)>\]]+|isbn:.*|sha256.*|\d{8}-[a-z]+-[0-9a-f]{6}|^\s*(total|total_value|buying_power|cash_jpy|cash_usd|margin_deposit|fx_usdjpy|positions):\s*-?[\d.]+\s*$/gim, ""))) {
       issues.push({ level: "error", path: n.path, msg: "long digit run (account/card number?)" });
     }
   }

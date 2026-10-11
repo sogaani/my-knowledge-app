@@ -103,8 +103,10 @@ export function buildGold(cfg: KbConfig, db: Database): string[] {
       if (/^\d{4}-\d{2}-\d{2}$/.test(d)) ev.push({ date: d, who: link(n), label, days: day(d) });
     };
     for (const n of stocks) {
-      push(n, n.fm.next_earnings, "決算発表");
-      for (const e of (Array.isArray(n.fm.events) ? n.fm.events : []) as { date?: string; label?: string }[]) if (e.label !== "決算発表" || e.date !== n.fm.next_earnings) push(n, e.date, String(e.label ?? ""));
+      const events = (Array.isArray(n.fm.events) ? n.fm.events : []) as { date?: string; label?: string }[];
+      // next_earnings only adds a row when no event already sits on that date (the skill usually records both)
+      if (!events.some((e) => e.date === n.fm.next_earnings)) push(n, n.fm.next_earnings, "決算発表");
+      for (const e of events) push(n, e.date, String(e.label ?? ""));
     }
     for (const n of themes) for (const e of (Array.isArray(n.fm.events) ? n.fm.events : []) as { date?: string; label?: string }[]) push(n, e.date, String(e.label ?? ""));
     const upcoming = ev.filter((e) => e.days >= -7 && e.days <= 42).sort((a, b) => a.date.localeCompare(b.date));

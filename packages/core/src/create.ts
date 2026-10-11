@@ -34,7 +34,7 @@ export function createNote(cfg: KbConfig, reg: SchemaRegistry, db: Database | nu
   let text = fillTemplate(readFileSync(tplPath, "utf8"), vars);
   if (o.set && Object.keys(o.set).length) {
     const { fm, body } = parseNote(text);
-    Object.assign(fm, o.set);
+    Object.assign(fm, reg.coerce(o.type, o.set));
     text = stringifyNote(fm, body);
   }
   const folder = join(cfg.root, o.folder ?? def.folder);
@@ -76,8 +76,9 @@ export function findDuplicates(db: Database, type: string, title: string, set?: 
 }
 
 /** Update frontmatter fields of an existing note in place (used by `kb set` and the API's light edits). */
-export function patchFrontmatter(abs: string, patch: Record<string, unknown>): Record<string, unknown> {
+export function patchFrontmatter(abs: string, patch: Record<string, unknown>, reg?: SchemaRegistry): Record<string, unknown> {
   const { fm, body } = parseNote(readFileSync(abs, "utf8"));
+  if (reg) patch = reg.coerce(String(fm.type ?? ""), patch);
   for (const [k, v] of Object.entries(patch)) {
     if (v === null) delete fm[k];
     else fm[k] = v;

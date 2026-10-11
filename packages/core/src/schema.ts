@@ -10,6 +10,7 @@ export interface TypeDef {
   entity: "file" | "folder";
   statuses: string[];
   fields: string[];
+  props: Record<string, { type?: string }>;
   schema: Record<string, unknown>;
 }
 
@@ -36,6 +37,7 @@ export class SchemaRegistry {
         entity: x.entity ?? "file",
         statuses: schema.properties?.status?.enum ?? [],
         fields: Object.keys(props),
+        props,
         schema,
       });
       this.validators.set(type, this.ajv.compile(schema));
@@ -44,6 +46,14 @@ export class SchemaRegistry {
 
   get(type: string): TypeDef | undefined {
     return this.types.get(type);
+  }
+
+  /** CLI `--set k=v` parses numeric-looking values as numbers; keep them strings when the schema says so (e.g. stock code 1605). */
+  coerce(type: string, set: Record<string, unknown>): Record<string, unknown> {
+    const props = this.types.get(type)?.props ?? {};
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(set)) out[k] = props[k]?.type === "string" && typeof v === "number" ? String(v) : v;
+    return out;
   }
 
   /** Returns a list of human-readable errors; empty when valid. */

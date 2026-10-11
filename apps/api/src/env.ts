@@ -9,6 +9,9 @@ export const env = {
   allowedEmails: (process.env.ALLOWED_EMAILS ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean),
   workerServiceTokenName: process.env.WORKER_SERVICE_TOKEN_NAME ?? "", // Client ID of the Access service token (JWT common_name)
   workerToken: process.env.WORKER_TOKEN ?? "", // optional shared secret as a second factor / dev
+  // External pushers (Google Apps Script → POST /api/inbox only): second Access service token + optional shared secret
+  ingestServiceTokenName: process.env.INGEST_SERVICE_TOKEN_NAME ?? "",
+  ingestToken: process.env.INGEST_TOKEN ?? "",
   devBypassAuth: process.env.DEV_BYPASS_AUTH === "1",
   gitAuthor: process.env.GIT_AUTHOR ?? "kb-web <kb-web@local>",
   syncIntervalSec: Number(process.env.SYNC_INTERVAL_SEC ?? 300),

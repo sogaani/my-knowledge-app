@@ -31,6 +31,7 @@ function sha256(buf: Uint8Array | string): string {
 export function guessKind(p: string): BronzeKind {
   const e = extname(p).toLowerCase();
   if ([".eml", ".msg"].includes(e)) return "mail";
+  if (e === ".md" && /^mail-/.test(basename(p))) return "mail"; // Gmail pushes rendered as Markdown (mail-YYYYMMDD-<slug>-<id>.md)
   if ([".epub", ".mobi"].includes(e)) return "book";
   if ([".png", ".jpg", ".jpeg", ".heic", ".webp"].includes(e)) return "image";
   if ([".md", ".txt"].includes(e)) return "note";

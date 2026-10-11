@@ -1,17 +1,17 @@
 import { Hono } from "hono";
 import { serveStatic } from "hono/bun";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import {
   runQuery, parseFilters, readNote, patchFrontmatter, createNote, DuplicateError, gitCommitPush, lint, extractLinks,
   keywordSearch, type SearchResponse, type SearchMode,
 } from "@kb/core";
 import { env } from "./env";
-import { authenticate, requireUser, requireWorker, type Principal } from "./auth";
+import { authenticate, requireUser, requireWorker, requireInboxWriter, requireUserOrWorker, type Principal } from "./auth";
 import { cfg, reg, db, sync, head, reindex, isGitRepo, rebuildGold } from "./kb";
 import {
   createJob, getJob, listJobs, claimNextJob, appendJobLog, finishJob, requeueStale, pruneSearchJobs,
-  addInboxItem, inboxItemsForJob, getInboxItem, markInboxFetched, addChat, listChat, newId, type JobKind,
+  addInboxItem, inboxItemNameExists, inboxItemsForJob, getInboxItem, markInboxFetched, addChat, listChat, newId, type JobKind,
 } from "./store";
 
 type Vars = { principal: Principal };
@@ -168,10 +168,16 @@ api.post("/suggestions/react", requireUser, async (c) => {
   return c.json({ ok: true, created, commit });
 });
 
-api.post("/inbox", requireUser, async (c) => {
+/** Uploaded filenames come from outside (web UI, Apps Script): keep the basename, drop path/control chars. */
+const safeName = (n: string, id: string) => {
+  const b = basename(n).replace(/[\\/:*?"<>|\x00-\x1f]/g, "_").replace(/^\.+/, "").slice(0, 150);
+  return b || `file-${id.slice(0, 8)}`;
+};
+api.post("/inbox", requireInboxWriter, async (c) => {
   const ct = c.req.header("content-type") ?? "";
   const jobId = newId();
   const items: { id: string; kind: "url" | "text" | "file"; name: string }[] = [];
+  const skipped: string[] = [];
   const stage = join(env.dataDir, "staging", jobId);
   mkdirSync(stage, { recursive: true });
   if (ct.includes("multipart/form-data")) {
@@ -179,10 +185,14 @@ api.post("/inbox", requireUser, async (c) => {
     for (const [k, raw] of form.entries()) {
       const v = raw as unknown as string | File;
       if (typeof v !== "string") {
-        const id = newId(); const p = join(stage, v.name);
+        const id = newId();
+        let name = safeName(v.name, id);
+        if (inboxItemNameExists(name)) { skipped.push(name); continue; }
+        if (existsSync(join(stage, name))) name = `${id.slice(0, 8)}-${name}`;
+        const p = join(stage, name);
         writeFileSync(p, new Uint8Array(await v.arrayBuffer()));
-        addInboxItem({ id, job_id: jobId, kind: "file", name: v.name, path: p, url: null, text: null });
-        items.push({ id, kind: "file", name: v.name });
+        addInboxItem({ id, job_id: jobId, kind: "file", name, path: p, url: null, text: null });
+        items.push({ id, kind: "file", name });
       } else if (k === "url" && String(v).trim()) {
         const id = newId(); addInboxItem({ id, job_id: jobId, kind: "url", name: String(v), path: null, url: String(v).trim(), text: null }); items.push({ id, kind: "url", name: String(v) });
       } else if (k === "text" && String(v).trim()) {
@@ -195,9 +205,12 @@ api.post("/inbox", requireUser, async (c) => {
     if (b.url) { const id = newId(); addInboxItem({ id, job_id: jobId, kind: "url", name: b.url, path: null, url: b.url, text: null }); items.push({ id, kind: "url", name: b.url }); }
     if (b.text) { const id = newId(); const name = `${(b.title ?? "memo").replace(/[\\/:*?"<>|]/g, "")}-${id.slice(0, 6)}.md`; addInboxItem({ id, job_id: jobId, kind: "text", name, path: null, url: null, text: b.text }); items.push({ id, kind: "text", name }); }
   }
-  if (!items.length) return c.json({ error: "nothing to ingest" }, 400);
+  const who = c.get("principal");
+  console.log(`inbox: ${who.kind}/${who.kind === "user" ? who.email : who.name} staged ${items.length} skipped ${skipped.length}`);
+  // Everything already staged earlier: still 200 so an idempotent pusher can mark its side as done.
+  if (!items.length) return skipped.length ? c.json({ job: null, items, skipped }) : c.json({ error: "nothing to ingest" }, 400);
   const job = createJobWithId(jobId, "ingest", { items });
-  return c.json({ job, items });
+  return c.json({ job, items, skipped });
 });
 function createJobWithId(id: string, kind: JobKind, payload: unknown) {
   const { store } = require("./store") as typeof import("./store");
@@ -207,7 +220,7 @@ function createJobWithId(id: string, kind: JobKind, payload: unknown) {
 
 api.get("/jobs", requireUser, (c) => c.json(listJobs(Number(c.req.query("limit") ?? 50))));
 api.get("/jobs/:id", requireUser, (c) => { const j = getJob(c.req.param("id") ?? ""); return j ? c.json(j) : c.json({ error: "not found" }, 404); });
-api.post("/jobs", requireUser, async (c) => {
+api.post("/jobs", requireUserOrWorker, async (c) => {
   const b = (await c.req.json()) as { kind: JobKind; payload?: unknown };
   if (!["ingest", "ask", "recommend", "skill"].includes(b.kind)) return c.json({ error: "bad kind" }, 400);
   return c.json(createJob(b.kind, b.payload ?? {}));

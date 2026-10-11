@@ -73,6 +73,10 @@ export function requeueStale(maxMinutes = 60) {
 export function addInboxItem(it: Omit<InboxItem, "created_at" | "fetched">) {
   store.run("INSERT INTO inbox_items(id,job_id,kind,name,path,url,text,created_at) VALUES(?,?,?,?,?,?,?,?)", [it.id, it.job_id, it.kind, it.name, it.path, it.url, it.text, now()]);
 }
+/** True when a file of this name was already staged (idempotent pushes from Gmail: the name embeds the message id). */
+export function inboxItemNameExists(name: string): boolean {
+  return !!store.query("SELECT 1 FROM inbox_items WHERE name=? LIMIT 1").get(name);
+}
 export function inboxItemsForJob(jobId: string): InboxItem[] {
   return store.query("SELECT * FROM inbox_items WHERE job_id=?").all(jobId) as InboxItem[];
 }

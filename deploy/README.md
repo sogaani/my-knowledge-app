@@ -34,9 +34,16 @@ The cluster's [cloudflare-zero-trust-operator](https://github.com/BojanZelic/clo
 
 Both carry `cloudflare.zelic.io/prevent-destroy: "true"`, so deleting the Argo app leaves them in Cloudflare.
 
-One-time, in the dashboard:
-1. Zero Trust → Settings → Authentication: add **Google** as a login method.
-2. Team domain `sogaani.cloudflareaccess.com` is already set in `config.CF_ACCESS_TEAM_DOMAIN`.
+One-time, in the Cloudflare Zero Trust dashboard (https://one.dash.cloudflare.com/, team `sogaani`):
+1. **Integrations → Identity providers → Add new → Google.** It asks for an OAuth client from Google Cloud Console (https://console.cloud.google.com):
+   - APIs & Services → OAuth consent screen: External; add `soga.ani@gmail.com` as a test user.
+   - Credentials → Create credentials → OAuth client ID → Web application:
+     - Authorized JavaScript origins: `https://sogaani.cloudflareaccess.com`
+     - Authorized redirect URIs: `https://sogaani.cloudflareaccess.com/cdn-cgi/access/callback`
+   - Paste the Client ID / Client Secret into Cloudflare, save, then **Test**.
+
+   Alternative without Google: the built-in **One-time PIN** provider (a code mailed to the address). The `owner` policy matches by email, so it works with either.
+2. Team domain `sogaani.cloudflareaccess.com` is already set in `config.CF_ACCESS_TEAM_DOMAIN` (shown under Settings → Team name and domain).
 
 After the first sync (the operator doesn't expose the AUD):
 ```

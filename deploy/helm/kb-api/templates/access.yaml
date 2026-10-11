@@ -26,15 +26,17 @@ spec:
   allowedIdps: {{- toYaml $a.allowedIdps | nindent 4 }}
   autoRedirectToIdentity: {{ $a.autoRedirectToIdentity }}
   sessionDuration: {{ $a.sessionDuration }}
+  # The operator creates policies in order and stops at the first failure: keep owner first so login
+  # stays protected even if the service token can't be created yet.
   policies:
+    - name: owner
+      decision: allow
+      include:
+        - emails: {{- toYaml $a.allowedEmails | nindent 12 }}
     # Mac worker: service token only, no login (Service Auth).
     - name: worker
       decision: non_identity
       include:
         - serviceToken:
             - valueFrom: { name: {{ $a.serviceTokenName }}, namespace: {{ .Release.Namespace }} }
-    - name: owner
-      decision: allow
-      include:
-        - emails: {{- toYaml $a.allowedEmails | nindent 12 }}
 {{- end }}

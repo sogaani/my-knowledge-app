@@ -1,8 +1,9 @@
 /**
- * Places API (New) Place Details for placeIds, behind a local SQLite cache that forgets entries after at most 30 days
- * (Google Maps Platform terms: only place IDs may be stored indefinitely; lat/lng for up to 30 days, so coordinates
- * come from the Timeline export instead of the API). Only displayName, primaryType and googleMapsUri are requested
- * (all in the same Place Details tier).
+ * Places API (New) Place Details for placeIds, behind a local SQLite cache (default 70 days).
+ * The TTL is longer than the window `kb location import` rebuilds (this month and last month, ≤ 62 days), so a place
+ * fetched once is always a cache hit when its visits are rebuilt. NOTE: this exceeds the Google Maps Platform terms
+ * (only place IDs may be stored indefinitely; lat/lng for up to 30 days) — the owner's decision. Coordinates still come
+ * from the Timeline export, not the API. Only displayName, primaryType and googleMapsUri are requested (same tier).
  */
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
@@ -11,7 +12,9 @@ import { HttpError, mapLimit, type HttpClient } from "../collect/http";
 
 const API = "https://places.googleapis.com/v1/places";
 const DAY = 86_400_000;
-export const MAX_CACHE_DAYS = 30;
+export const DEFAULT_CACHE_DAYS = 70;
+/** Longest gap between the first fetch of a visit's place and its last rebuild (visit on the 1st of last month, rebuilt on the 31st of this month). */
+export const REBUILD_WINDOW_DAYS = 62;
 
 export interface PlaceInfo {
   placeId: string;
@@ -26,14 +29,14 @@ export interface PlaceInfo {
 export class PlacesCache {
   private db: Database;
   readonly ttlMs: number;
-  constructor(path: string, ttlDays = MAX_CACHE_DAYS) {
+  constructor(path: string, ttlDays = DEFAULT_CACHE_DAYS) {
     if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
     this.db = new Database(path);
     this.db.run("CREATE TABLE IF NOT EXISTS places (place_id TEXT PRIMARY KEY, display_name TEXT, primary_type TEXT, maps_uri TEXT, status TEXT NOT NULL, fetched_at INTEGER NOT NULL)");
     // caches created before googleMapsUri was requested
     const cols = this.db.query("PRAGMA table_info(places)").all() as { name: string }[];
     if (!cols.some((c) => c.name === "maps_uri")) this.db.run("ALTER TABLE places ADD COLUMN maps_uri TEXT");
-    this.ttlMs = Math.min(Math.max(ttlDays, 0), MAX_CACHE_DAYS) * DAY;
+    this.ttlMs = Math.max(ttlDays, 0) * DAY;
   }
   get(placeId: string, now = Date.now()): PlaceInfo | undefined {
     const r = this.db.query("SELECT display_name, primary_type, maps_uri, status, fetched_at FROM places WHERE place_id = ?").get(placeId) as

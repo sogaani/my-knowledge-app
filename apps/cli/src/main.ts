@@ -103,7 +103,9 @@ switch (cmd) {
       const meta = /^https?:\/\//.test(t)
         ? await ingestUrl(cfg, t)
         : ingestFile(cfg, t, { kind: f.kind as BronzeKind | undefined, keep: !!f.keep });
-      f.json ? json(meta) : console.log(`${meta.id}\t${meta.kind}\t${meta.title ?? meta.source}`);
+      const dup = "duplicate" in meta && meta.duplicate;
+      // already in Bronze: same content as an earlier capture, nothing new was stored (processed_to tells if it was handled)
+      f.json ? json(meta) : console.log(`${meta.id}\t${meta.kind}\t${meta.title ?? meta.source}${dup ? `\talready in Bronze (processed: ${meta.processed_to.join(", ") || "no"})` : ""}`);
     }
     break;
   }
@@ -276,6 +278,7 @@ switch (cmd) {
     const [sub, id] = pos;
     if (sub !== "import" || !id) die("usage: kb location import <bronze-id> [--max-lookups 300] [--all]   (a Google Maps Timeline export)");
     const r = await importLocation(cfg, reg, db(), id!, { maxLookups: f["max-lookups"] ? Number(f["max-lookups"]) : undefined, all: !!f.all });
+    if (r.ttlWarning) console.log(`warning: ${r.ttlWarning}`);
     for (const m of r.months) console.log(`${m.created ? "created" : "updated"} ${m.path} (${m.visits} visits${m.unresolved ? `, ${m.unresolved} 未取得` : ""})`);
     if (r.skippedMonths.length) console.log(`skipped ${r.skippedMonths.length} month(s) already recorded (--all to rebuild): ${r.skippedMonths[0]}..${r.skippedMonths.at(-1)}`);
     console.log(`places: ${r.cached} cached, ${r.fetched} fetched${r.deferred ? `, ${r.deferred} deferred (rerun: kb location import ${r.bronzeId})` : ""}`);
@@ -306,7 +309,7 @@ switch (cmd) {
   source <id> [--full]               Bronze meta + excerpt (logged)
   processed <id> <silver-path>... | <id> --none   record which Silver notes came from a Bronze item (--none: nothing to reflect)
   health import <bronze-id>          rebuild the monthly health_log notes from a collect-health feed
-  location import <bronze-id> [--max-lookups 300] [--all]   Google Maps Timeline export → monthly location_log (Places API, 30-day cache)
+  location import <bronze-id> [--max-lookups 300] [--all]   Google Maps Timeline export → monthly location_log (Places API, 70-day cache)
   collect [source...] [--dry-run]    run collectors into 000_inbox (secrets: use \`bun run collect\` with apps/collector/.env)
   portfolio import <csv|bronze-id> [--account 楽天証券]   update the portfolio note from a 楽天証券 asset CSV (CP932 ok)
   query [type=book rating>=4] [--text "..."] [--include-archive] [--json] [--limit n] [--order -updated]

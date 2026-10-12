@@ -74,7 +74,7 @@ describe("places", () => {
     await expect(fetchPlace(bad, "BAD", "P1")).rejects.toBeInstanceOf(HttpError);
   });
 
-  test("cache: hits within 30 days skip the API, older entries are refetched and purged", async () => {
+  test("cache: hits within the TTL skip the API, older entries are refetched and purged", async () => {
     const cache = new PlacesCache(":memory:", 30);
     const day = 86_400_000, t0 = Date.parse("2026-10-01T00:00:00Z");
     const a = placesApi({ P1: ["ジム", "gym"], P2: ["美術館", "art_museum"] });
@@ -85,7 +85,7 @@ describe("places", () => {
     expect(cache.purge(t0 + 31 * day)).toBe(2); // gone after 30 days
     const r3 = await lookupPlaces(["P1"], { http: a.http, apiKey: "K", cache, maxLookups: 10, now: t0 + 31 * day });
     expect(r3.fetched).toBe(1);
-    expect(new PlacesCache(":memory:", 365).ttlMs).toBe(30 * day); // TTL is capped at 30 days
+    expect(new PlacesCache(":memory:").ttlMs).toBe(70 * day); // default: longer than the 62-day rebuild window
   });
 
   test("a cache written before googleMapsUri existed is migrated, and its rows are refetched", async () => {
@@ -197,5 +197,45 @@ describe("wall-clock dates", () => {
   test("the export's own offset decides the date (a late night abroad stays on its local day)", () => {
     expect(localDate("2026-10-01T23:30:00.000-07:00")).toBe("2026-10-01");
     expect(localDate("2026-10-01T00:30:00+09:00")).toBe("2026-10-01");
+  });
+});
+
+describe("cache vs rebuild window", () => {
+  test("a place fetched on first import is still cached at the last rebuild of its month (day 1 of last month → end of this month)", async () => {
+    const { REBUILD_WINDOW_DAYS, DEFAULT_CACHE_DAYS } = require("./places") as typeof import("./places");
+    expect(DEFAULT_CACHE_DAYS).toBeGreaterThan(REBUILD_WINDOW_DAYS);
+    const day = 86_400_000;
+    const visit = new Date(2026, 8, 1); // Sep 1: first imported on that day
+    const lastRebuild = new Date(2026, 9, 31); // Oct 31: September is still "last month"
+    expect(pickMonths(["2026-09"], new Map([["2026-09", { unresolved: 0 }]]), lastRebuild).rebuild).toEqual(["2026-09"]);
+    expect(pickMonths(["2026-09"], new Map([["2026-09", { unresolved: 0 }]]), new Date(2026, 10, 1)).rebuild).toEqual([]); // Nov 1: settled
+    expect((lastRebuild.getTime() - visit.getTime()) / day).toBeLessThanOrEqual(REBUILD_WINDOW_DAYS);
+    const cache = new PlacesCache(":memory:");
+    const a = placesApi({ P1: ["ジム", "gym"] });
+    await lookupPlaces(["P1"], { http: a.http, apiKey: "K", cache, maxLookups: 5, now: visit.getTime() });
+    const again = await lookupPlaces(["P1"], { http: a.http, apiKey: "K", cache, maxLookups: 5, now: lastRebuild.getTime() });
+    expect([again.cached, again.fetched, a.calls.length]).toEqual([1, 0, 1]);
+  });
+});
+
+describe("re-imports", () => {
+  test("the same export dropped again is not stored twice; an older export cannot rebuild over a newer one", async () => {
+    const { cfg, reg } = kb();
+    const drop = (name: string, json: unknown) => { const p = join(cfg.inbox, name); writeFileSync(p, JSON.stringify(json)); return p; };
+    const first = ingestFile(cfg, drop("Timeline.json", android));
+    const again = ingestFile(cfg, drop("Timeline (1).json", android));
+    expect(again.id).toBe(first.id);
+    expect((again as { duplicate?: boolean }).duplicate).toBe(true);
+    expect(require("node:fs").readdirSync(cfg.inbox)).toEqual([]); // the inbox copy is dropped
+
+    const db = openDb(cfg);
+    indexNotes(cfg, db);
+    const api = placesApi({ P_gym: ["ジム", "gym"], P_museum: ["美術館", "art_museum"] });
+    const opts = { http: api.http, apiKey: "K", now: new Date(2026, 9, 12), cachePath: join(cfg.cache, "places.sqlite") };
+    await Bun.sleep(5);
+    const newer = ingestFile(cfg, drop("Timeline.json", { ...android, semanticSegments: android.semanticSegments.slice(0, 1) }));
+    await importLocation(cfg, reg, db, newer.id, opts);
+    indexNotes(cfg, db);
+    await expect(importLocation(cfg, reg, db, first.id, opts)).rejects.toThrow(`is older than ${newer.id}`);
   });
 });

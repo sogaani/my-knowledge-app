@@ -1,13 +1,15 @@
 /**
  * `kb location import <bronze-id>`: a Google Maps Timeline export in Bronze → monthly `location_log` notes
- * (200_silver/211_location, git-crypt). Place names / types come from the Places API (cached ≤ 30 days, places.ts);
- * coordinates stay those of the export. Exports repeat the whole history, so each rebuilt month is assembled from every
- * Timeline export in Bronze (dedup by start + placeId) and only some months are rebuilt per run (see pickMonths).
+ * (200_silver/211_location, git-crypt). Place names / types / Maps links come from the Places API (cache, places.ts);
+ * coordinates stay those of the export. Every export repeats the whole on-device history, so a rebuilt month comes from
+ * this export alone (the phone is the source of truth; visits only older exports had stay in months that are not
+ * rebuilt), and only some months are rebuilt per run (see pickMonths). Importing an export older than one already
+ * imported is refused, so newer records are never rebuilt from older data.
  */
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Database } from "bun:sqlite";
-import { today, type KbConfig } from "../config";
+import { LAYOUT, today, type KbConfig } from "../config";
 import { bronzeDir, markProcessed, readMeta, walkBronze, type BronzeMeta } from "../bronze";
 import { createNote } from "../create";
 import { parseNote, stringifyNote } from "../frontmatter";
@@ -15,7 +17,7 @@ import { runQuery } from "../query";
 import type { SchemaRegistry } from "../schema";
 import { createHttp, type HttpClient } from "../collect/http";
 import { looksLikeTimeline, parseTimeline, type Visit } from "./parse";
-import { lookupPlaces, PlacesCache, MAX_CACHE_DAYS, type PlaceInfo } from "./places";
+import { lookupPlaces, PlacesCache, DEFAULT_CACHE_DAYS, REBUILD_WINDOW_DAYS, type PlaceInfo } from "./places";
 
 const BEGIN = "<!-- kb:location:start -->";
 const END = "<!-- kb:location:end -->";
@@ -64,6 +66,8 @@ export interface LocationImportOpts {
 export interface LocationRow { visit: Visit; place?: PlaceInfo }
 export interface LocationImportResult {
   bronzeId: string;
+  /** set when the cache TTL is shorter than the rebuild window (places may be refetched) */
+  ttlWarning?: string;
   months: { path: string; created: boolean; visits: number; unresolved: number }[];
   skippedMonths: string[];
   notable: LocationRow[];
@@ -116,6 +120,10 @@ export async function importLocation(cfg: KbConfig, reg: SchemaRegistry, db: Dat
   if (!apiKey) throw new Error("Places API key missing: set [places] api_key in 900_system/config.local.toml (or GOOGLE_MAPS_API_KEY)");
   const now = o.now ?? new Date();
 
+  // a newer export already imported → refuse (cheap: Bronze metas only, no file reads)
+  const newer = [...walkBronze(cfg)].find((m) => m.id !== bronzeId && m.captured_at > meta.captured_at && m.processed_to.some((p) => p.startsWith(`${LAYOUT.silver}/211_location/`)));
+  if (newer) throw new Error(`${bronzeId} is older than ${newer.id}, which is already imported: import the newest export (kb location import ${newer.id})`);
+
   const own = parseTimeline(JSON.parse(readFileSync(file, "utf8")));
   const existing = new Map<string, { path: string; unresolved: number }>();
   for (const n of runQuery(db, { filters: [{ field: "type", op: "=", value: "location_log" }], limit: 10000 })) {
@@ -123,26 +131,12 @@ export async function importLocation(cfg: KbConfig, reg: SchemaRegistry, db: Dat
   }
   const { rebuild, skip } = pickMonths(own.map((v) => localDate(v.start).slice(0, 7)), existing, now, o.all);
 
-  // every Timeline export in Bronze (oldest capture first, so a later export wins on the same visit)
-  const exports = [...walkBronze(cfg)]
-    .filter((m) => m.kind === "file" && m.files.some((f) => /\.json$/i.test(f)))
-    .sort((a, b) => a.captured_at.localeCompare(b.captured_at));
+  // this export only (dedup by start + placeId: segments can repeat across hierarchy levels)
   const byMonth = new Map<string, Map<string, Visit>>(rebuild.map((m) => [m, new Map()]));
-  const contributing = new Map<string, Set<string>>(rebuild.map((m) => [m, new Set()]));
-  for (const m of exports) {
-    const f = m.id === bronzeId ? file : timelineFile(cfg, m);
-    if (!f) continue;
-    const visits = m.id === bronzeId ? own : parseTimeline(JSON.parse(readFileSync(f, "utf8")));
-    for (const v of visits) {
-      const month = byMonth.get(localDate(v.start).slice(0, 7));
-      if (!month) continue;
-      month.set(`${v.start}|${v.placeId}`, v);
-      contributing.get(localDate(v.start).slice(0, 7))!.add(m.id);
-    }
-  }
+  for (const v of own) byMonth.get(localDate(v.start).slice(0, 7))?.set(`${v.start}|${v.placeId}`, v);
 
   const ids = [...byMonth.values()].flatMap((m) => [...m.values()].map((v) => v.placeId));
-  const ttl = Number(cfg.local.places?.cache_ttl_days ?? MAX_CACHE_DAYS);
+  const ttl = Number(cfg.local.places?.cache_ttl_days ?? DEFAULT_CACHE_DAYS);
   const cache = new PlacesCache(o.cachePath ?? join(cfg.cache, "places.sqlite"), ttl);
   let lookup;
   try {
@@ -154,7 +148,10 @@ export async function importLocation(cfg: KbConfig, reg: SchemaRegistry, db: Dat
     cache.close();
   }
 
-  const result: LocationImportResult = { bronzeId, months: [], skippedMonths: skip, notable: [], fetched: lookup.fetched, cached: lookup.cached, deferred: lookup.deferred.length };
+  const result: LocationImportResult = {
+    bronzeId,
+    ...(ttl < REBUILD_WINDOW_DAYS ? { ttlWarning: `places cache_ttl_days=${ttl} is shorter than the ${REBUILD_WINDOW_DAYS}-day rebuild window: places of older visits may be fetched again` } : {}),
+    months: [], skippedMonths: skip, notable: [], fetched: lookup.fetched, cached: lookup.cached, deferred: lookup.deferred.length };
   for (const month of rebuild) {
     const rows: LocationRow[] = [...byMonth.get(month)!.values()]
       .sort((a, b) => Date.parse(a.start) - Date.parse(b.start))
@@ -186,7 +183,7 @@ export async function importLocation(cfg: KbConfig, reg: SchemaRegistry, db: Dat
       summary: `${month.replace("-", "年").replace(/^(\d+年)0?/, "$1")}月の滞在記録（${rows.length} 件・${new Set(rows.map((r) => r.visit.placeId)).size} か所）`,
       updated: today(),
     });
-    fm.sources = [...new Set([...(Array.isArray(fm.sources) ? fm.sources.map(String) : []), ...contributing.get(month)!])];
+    fm.sources = [...new Set([...(Array.isArray(fm.sources) ? fm.sources.map(String) : []), bronzeId])];
     writeFileSync(abs, stringifyNote(fm, newBody));
     markProcessed(cfg, bronzeId, [rel]);
     result.months.push({ path: rel, created, visits: rows.length, unresolved });

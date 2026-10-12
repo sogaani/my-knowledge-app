@@ -46,10 +46,19 @@ export function bronzeDir(cfg: KbConfig, id: string): string {
   return join(cfg.bronze, y, m, id);
 }
 
-/** Move a local file (usually from 000_inbox) into Bronze. Returns meta. */
-export function ingestFile(cfg: KbConfig, src: string, opts: { kind?: BronzeKind; keep?: boolean; title?: string; sourceLabel?: string } = {}): BronzeMeta {
+/**
+ * Move a local file (usually from 000_inbox) into Bronze. Returns meta.
+ * A file whose content is already in Bronze (same SHA-256, any day) is not stored again: the inbox copy is dropped
+ * and the existing item is returned with `duplicate: true` (e.g. the same Timeline export dropped twice).
+ */
+export function ingestFile(cfg: KbConfig, src: string, opts: { kind?: BronzeKind; keep?: boolean; title?: string; sourceLabel?: string } = {}): BronzeMeta & { duplicate?: true } {
   const buf = readFileSync(src);
   const hash = sha256(buf);
+  const same = findBySha256(cfg, hash);
+  if (same) {
+    if (!opts.keep) unlinkSync(src);
+    return { ...same, duplicate: true };
+  }
   const kind = opts.kind ?? guessKind(src);
   const id = `${today().replace(/-/g, "")}-${kind}-${hash.slice(0, 6)}`;
   const dir = bronzeDir(cfg, id);
@@ -90,6 +99,12 @@ export async function ingestUrl(cfg: KbConfig, url: string): Promise<BronzeMeta>
   };
   writeFileSync(join(dir, "meta.json"), JSON.stringify(meta, null, 2));
   return meta;
+}
+
+/** The Bronze item holding exactly this content, if any (ingestUrl hashes the URL, so web captures never match). */
+export function findBySha256(cfg: KbConfig, hash: string): BronzeMeta | null {
+  for (const m of walkBronze(cfg)) if (m.sha256 === hash && m.kind !== "web") return m;
+  return null;
 }
 
 export function readMeta(cfg: KbConfig, id: string): BronzeMeta | null {

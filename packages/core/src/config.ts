@@ -35,6 +35,8 @@ export interface LocalConfig {
   backup?: { dest?: string };
   prune?: { keepYears?: number };
   embedding?: Partial<EmbeddingConfig>;
+  /** `kb location import`: Places API (New) key (env GOOGLE_MAPS_API_KEY wins), cache TTL (≤ 30 days), API calls per run */
+  places?: { api_key?: string; cache_ttl_days?: number; max_lookups?: number };
   [k: string]: unknown;
 }
 
@@ -64,6 +66,7 @@ export const GOLD = {
   suggestions: "307_suggestions.md",
   trading: "308_trading.md",
   health: "310_health.md",
+  location: "311_location.md",
 } as const;
 
 /** Repo-relative prefixes, for `path.startsWith(...)` and SQL `LIKE` checks. */

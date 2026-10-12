@@ -3,7 +3,7 @@ import { join } from "node:path";
 import {
   loadConfig, openDb, indexNotes, SchemaRegistry, createNote, DuplicateError, patchFrontmatter, appendToSection,
   ingestFile, ingestUrl, sourceExcerpt, markProcessed, listInbox, parseFilters, runQuery, buildGold,
-  validateAll, archiveNote, lint, backupBronze, pruneBronze, logAccess, importPortfolio, importHealth, runCollectors, type BronzeKind,
+  validateAll, archiveNote, lint, backupBronze, pruneBronze, logAccess, importPortfolio, importHealth, importLocation, runCollectors, type BronzeKind,
   search, VectorStore, embedNotes, makeEmbedder, setupLindera, linderaStatus, resolveTokenizer, readVectorMeta, type SearchMode,
 } from "@kb/core";
 
@@ -18,7 +18,7 @@ function flags(args: string[]) {
     if (a.startsWith("--")) {
       const [k, v] = a.slice(2).split("=");
       if (v !== undefined) f[k] = v;
-      else if (args[i + 1] !== undefined && !args[i + 1].startsWith("--") && ["set", "dest", "kind", "text", "status", "older-than", "type", "limit", "order", "chars", "title", "folder", "section", "fields", "mode", "account"].includes(k)) f[k] = args[++i];
+      else if (args[i + 1] !== undefined && !args[i + 1].startsWith("--") && ["set", "dest", "kind", "text", "status", "older-than", "type", "limit", "order", "chars", "title", "folder", "section", "fields", "mode", "account", "max-lookups"].includes(k)) f[k] = args[++i];
       else f[k] = true;
     } else pos.push(a);
   }
@@ -271,6 +271,20 @@ switch (cmd) {
     if (!r.months.length) console.log(`no days in ${r.bronzeId}; marked processed`);
     break;
   }
+  case "location": {
+    const { f, pos } = flags(argv);
+    const [sub, id] = pos;
+    if (sub !== "import" || !id) die("usage: kb location import <bronze-id> [--max-lookups 300] [--all]   (a Google Maps Timeline export)");
+    const r = await importLocation(cfg, reg, db(), id!, { maxLookups: f["max-lookups"] ? Number(f["max-lookups"]) : undefined, all: !!f.all });
+    for (const m of r.months) console.log(`${m.created ? "created" : "updated"} ${m.path} (${m.visits} visits${m.unresolved ? `, ${m.unresolved} 未取得` : ""})`);
+    if (r.skippedMonths.length) console.log(`skipped ${r.skippedMonths.length} month(s) already recorded (--all to rebuild): ${r.skippedMonths[0]}..${r.skippedMonths.at(-1)}`);
+    console.log(`places: ${r.cached} cached, ${r.fetched} fetched${r.deferred ? `, ${r.deferred} deferred (rerun: kb location import ${r.bronzeId})` : ""}`);
+    if (r.notable.length) {
+      console.log("notable visits:");
+      for (const { visit: v, place: p } of r.notable) console.log(`  ${new Date(v.start).toLocaleString("ja-JP", { dateStyle: "short", timeStyle: "short" })} ${p!.name} (${p!.primaryType})`);
+    }
+    break;
+  }
   case "collect": {
     // Scheduled runs use `bun run collect` (apps/collector, loads its .env). Here: sources that need no secrets,
     // e.g. `kb collect linkedin` from the ingest skill when an export ZIP is waiting in the inbox.
@@ -292,6 +306,7 @@ switch (cmd) {
   source <id> [--full]               Bronze meta + excerpt (logged)
   processed <id> <silver-path>... | <id> --none   record which Silver notes came from a Bronze item (--none: nothing to reflect)
   health import <bronze-id>          rebuild the monthly health_log notes from a collect-health feed
+  location import <bronze-id> [--max-lookups 300] [--all]   Google Maps Timeline export → monthly location_log (Places API, 30-day cache)
   collect [source...] [--dry-run]    run collectors into 000_inbox (secrets: use \`bun run collect\` with apps/collector/.env)
   portfolio import <csv|bronze-id> [--account 楽天証券]   update the portfolio note from a 楽天証券 asset CSV (CP932 ok)
   query [type=book rating>=4] [--text "..."] [--include-archive] [--json] [--limit n] [--order -updated]

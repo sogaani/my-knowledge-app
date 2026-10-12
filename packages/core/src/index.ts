@@ -18,3 +18,4 @@ export * from "./vector";
 export * from "./search";
 export * from "./collect";
 export * from "./health";
+export * from "./location";

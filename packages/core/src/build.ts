@@ -4,6 +4,7 @@ import { readNote } from "./notes";
 import type { Database } from "bun:sqlite";
 import { GOLD, GOLD_PREFIX, today, type KbConfig } from "./config";
 import { runQuery, type QueryResult } from "./query";
+import { buildCrossViews } from "./views";
 
 /** Regenerate every Gold markdown file from the index. Gold is derived; never hand-edited. */
 export function buildGold(cfg: KbConfig, db: Database): string[] {
@@ -177,6 +178,9 @@ export function buildGold(cfg: KbConfig, db: Database): string[] {
       : ["| （なし） | | | | |"]),
   ].join("\n"));
 
+  // 390 / 391 / 392: views across domains (views.ts)
+  buildCrossViews(cfg, db, out, { daily: GOLD.daily, trends: GOLD.trends, upcoming: GOLD.upcoming });
+
   // 300 home
   const reviews = q("type=review", { orderBy: "-updated", limit: 5 });
   const recent = runQuery(db, { filters: [], orderBy: "-updated", limit: 15 }).filter((n) => !n.path.startsWith(GOLD_PREFIX));
@@ -184,6 +188,9 @@ export function buildGold(cfg: KbConfig, db: Database): string[] {
     "# ホーム", "",
     "読む順番: このページ → `kb query` → 該当ノート。Bronze は `kb source <id>`。", "",
     "## ダッシュボード",
+    `- [ライフログ](${GOLD.daily}) — 直近 60 日を 1 日 1 行で`,
+    `- [トレンド](${GOLD.trends}) — 月ごとの推移`,
+    `- [これからの予定](${GOLD.upcoming}) — 90 日先までの予定・期限`,
     `- [サブスクリプション](${GOLD.subscriptions}) — 月額換算 ¥` + Math.round(monthly).toLocaleString(),
     `- [金融サービス](${GOLD.finance})`,
     `- [読書](${GOLD.books}/index.md) — 読了 ${byStatus.read?.length ?? 0}, 読書中 ${byStatus.reading?.length ?? 0}`,

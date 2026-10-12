@@ -40,6 +40,9 @@ export default function App() {
         <Item to="/suggestions">おすすめ</Item>
         <Item to="/trading">売買</Item>
         <Item to="/note/300_gold/300_market.md">市場メモ</Item>
+        <Item to="/note/300_gold/390_daily.md">ライフログ</Item>
+        <Item to="/note/300_gold/391_trends.md">トレンド</Item>
+        <Item to="/note/300_gold/392_upcoming.md">これからの予定</Item>
         <Item to="/jobs">ジョブ</Item>
         <div className="hidden px-2.5 pt-3.5 text-[11px] text-muted-foreground uppercase md:block">ノート</div>
         {TYPES.map(([t, label]) => <Item key={t} to={`/notes/${t}`}>{label}</Item>)}

@@ -3,7 +3,7 @@ import { join } from "node:path";
 import {
   loadConfig, openDb, indexNotes, SchemaRegistry, createNote, DuplicateError, patchFrontmatter, appendToSection,
   ingestFile, ingestUrl, sourceExcerpt, markProcessed, listInbox, parseFilters, runQuery, buildGold,
-  validateAll, archiveNote, lint, backupBronze, pruneBronze, logAccess, importPortfolio, importHealth, importLocation, runCollectors, type BronzeKind,
+  validateAll, archiveNote, lint, backupBronze, pruneBronze, logAccess, importPortfolio, importHealth, importLocation, importCalendar, runCollectors, type BronzeKind,
   search, VectorStore, embedNotes, makeEmbedder, setupLindera, linderaStatus, resolveTokenizer, readVectorMeta, type SearchMode,
 } from "@kb/core";
 
@@ -273,6 +273,14 @@ switch (cmd) {
     if (!r.months.length) console.log(`no days in ${r.bronzeId}; marked processed`);
     break;
   }
+  case "calendar": {
+    const { pos } = flags(argv);
+    const [sub, id] = pos;
+    if (sub !== "import" || !id) die("usage: kb calendar import <bronze-id>   (a collect-calendar feed; replays every calendar feed in Bronze)");
+    const r = importCalendar(cfg, reg, db(), id!);
+    for (const m of r.months) console.log(`${m.created ? "created" : "updated"} ${m.path} (実績 ${m.done} / 予定 ${m.planned})`);
+    break;
+  }
   case "location": {
     const { f, pos } = flags(argv);
     const [sub, id] = pos;
@@ -309,6 +317,7 @@ switch (cmd) {
   source <id> [--full]               Bronze meta + excerpt (logged)
   processed <id> <silver-path>... | <id> --none   record which Silver notes came from a Bronze item (--none: nothing to reflect)
   health import <bronze-id>          rebuild the monthly health_log notes from a collect-health feed
+  calendar import <bronze-id>        monthly calendar_log notes (212_calendar) from the collect-calendar feeds
   location import <bronze-id> [--max-lookups 300] [--all]   Google Maps Timeline export → monthly location_log (Places API, 70-day cache)
   collect [source...] [--dry-run]    run collectors into 000_inbox (secrets: use \`bun run collect\` with apps/collector/.env)
   portfolio import <csv|bronze-id> [--account 楽天証券]   update the portfolio note from a 楽天証券 asset CSV (CP932 ok)

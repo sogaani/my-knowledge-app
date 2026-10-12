@@ -19,3 +19,6 @@ export * from "./search";
 export * from "./collect";
 export * from "./health";
 export * from "./location";
+export * from "./wallclock";
+export * from "./calendar";
+export * from "./views";

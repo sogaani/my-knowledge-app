@@ -67,6 +67,10 @@ export const GOLD = {
   trading: "308_trading.md",
   health: "310_health.md",
   location: "311_location.md",
+  // 39x: views across domains (no domain number of their own)
+  daily: "390_daily.md",
+  trends: "391_trends.md",
+  upcoming: "392_upcoming.md",
 } as const;
 
 /** Repo-relative prefixes, for `path.startsWith(...)` and SQL `LIKE` checks. */

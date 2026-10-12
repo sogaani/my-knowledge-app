@@ -18,6 +18,9 @@ import type { SchemaRegistry } from "../schema";
 import { createHttp, type HttpClient } from "../collect/http";
 import { looksLikeTimeline, parseTimeline, type Visit } from "./parse";
 import { lookupPlaces, PlacesCache, DEFAULT_CACHE_DAYS, REBUILD_WINDOW_DAYS, type PlaceInfo } from "./places";
+import { localDate, localTime as hhmm } from "../wallclock";
+
+export { localDate };
 
 const BEGIN = "<!-- kb:location:start -->";
 const END = "<!-- kb:location:end -->";
@@ -29,13 +32,6 @@ export const NOTABLE_TYPES = new Set([
   "amusement_park", "zoo", "aquarium", "hospital", "dentist", "airport", "lodging", "hotel",
 ]);
 
-/**
- * Wall-clock date / time where the visit happened: the on-device exports carry the local offset ("…T10:00:00.000+09:00"),
- * so a trip abroad shows local times. Stamps without an offset / in UTC ("…Z") fall back to this machine's zone.
- */
-const WALL = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})(?::\d{2}(?:\.\d+)?)?[+-]\d{2}:?\d{2}$/;
-export const localDate = (iso: string) => WALL.exec(iso)?.[1] ?? new Date(iso).toLocaleDateString("sv-SE");
-const hhmm = (iso: string) => WALL.exec(iso)?.[2] ?? new Date(iso).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit", hour12: false });
 const duration = (a: string, b: string) => {
   const m = Math.max(0, Math.round((Date.parse(b) - Date.parse(a)) / 60_000));
   return m >= 60 ? `${Math.floor(m / 60)}h${String(m % 60).padStart(2, "0")}m` : `${m}m`;
@@ -178,8 +174,19 @@ export async function importLocation(cfg: KbConfig, reg: SchemaRegistry, db: Dat
       const at = h ? h.index + h[0].length : 0;
       newBody = body.slice(0, at) + "\n" + block + "\n" + body.slice(at);
     }
+    // machine-readable per-day data for the cross-domain Gold views (390_daily / 391_trends)
+    const daily: Record<string, { visits: number; places: string[]; types: string[] }> = {};
+    const typeCounts: Record<string, number> = {};
+    for (const r of rows) {
+      const d = (daily[localDate(r.visit.start)] ??= { visits: 0, places: [], types: [] });
+      d.visits++;
+      const name = r.place?.status === "ok" ? r.place.name : null;
+      if (name && !d.places.includes(name)) d.places.push(name);
+      const t = r.place?.primaryType;
+      if (t) { if (!d.types.includes(t)) d.types.push(t); typeCounts[t] = (typeCounts[t] ?? 0) + 1; }
+    }
     Object.assign(fm, {
-      month, visits: rows.length, places: new Set(rows.map((r) => r.visit.placeId)).size, unresolved, top_places: top,
+      month, visits: rows.length, places: new Set(rows.map((r) => r.visit.placeId)).size, unresolved, top_places: top, daily, type_counts: typeCounts,
       summary: `${month.replace("-", "年").replace(/^(\d+年)0?/, "$1")}月の滞在記録（${rows.length} 件・${new Set(rows.map((r) => r.visit.placeId)).size} か所）`,
       updated: today(),
     });

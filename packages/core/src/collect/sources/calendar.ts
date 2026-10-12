@@ -22,10 +22,11 @@ export interface EventItem {
 }
 type Cal = { id: string; summary: string };
 
+/** `key` (calendarId|recurringEventId-or-id) identifies an upcoming event / series across runs: `kb calendar import` applies the diffs by it. */
 export type CalendarItem =
   | { when: "past"; calendar: string; calendarId: string; event: EventItem }
-  | { when: "upcoming"; change: "new" | "updated"; calendar: string; calendarId: string; event: EventItem; recurring?: { count: number; first: string; last: string } }
-  | { when: "upcoming"; change: "removed"; calendar: string; calendarId: string; summary: string; start: string };
+  | { when: "upcoming"; change: "new" | "updated"; key: string; calendar: string; calendarId: string; event: EventItem; recurring?: { count: number; first: string; last: string } }
+  | { when: "upcoming"; change: "removed"; key: string; calendar: string; calendarId: string; summary: string; start: string };
 
 /** Per upcoming event / series: enough to detect a change and to describe it once it disappears. */
 interface Seen { sig: string; end: string; summary: string; start: string; calendar: string; calendarId: string }
@@ -76,14 +77,14 @@ export function diffUpcoming(prev: Record<string, Seen>, events: { cal: Cal; eve
     const before = prev[key];
     if (before && before.sig === sig) continue;
     items.push({
-      when: "upcoming", change: before ? "updated" : "new", calendar: cal.summary, calendarId: cal.id, event: first,
+      when: "upcoming", change: before ? "updated" : "new", key, calendar: cal.summary, calendarId: cal.id, event: first,
       ...(series ? { recurring: { count: evs.length, first: startOf(first), last: startOf(last) } } : {}),
     });
   }
   for (const [key, s] of Object.entries(prev)) {
     if (next[key]) continue;
     if (timeOf(s.end) <= now.getTime()) continue; // it simply happened: the past part reports it
-    items.push({ when: "upcoming", change: "removed", calendar: s.calendar, calendarId: s.calendarId, summary: s.summary, start: s.start });
+    items.push({ when: "upcoming", change: "removed", key, calendar: s.calendar, calendarId: s.calendarId, summary: s.summary, start: s.start });
   }
   return { items, next };
 }

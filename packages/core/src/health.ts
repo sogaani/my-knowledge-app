@@ -90,8 +90,12 @@ export function importHealth(cfg: KbConfig, reg: SchemaRegistry, db: Database, b
       newBody = body.slice(0, at) + "\n" + block + "\n" + body.slice(at);
     }
     const avgSteps = avg(days.map((d) => d.steps)), avgSleep = avg(days.map((d) => d.sleepMinutes));
+    // machine-readable per-day values for the cross-domain Gold views (390_daily / 391_trends); the table is for people
+    const daily = Object.fromEntries(days.map((d) => [d.date, Object.fromEntries(Object.entries({
+      steps: d.steps, sleep_min: d.sleepMinutes, deep_min: d.deepMinutes, rem_min: d.remMinutes, active_min: d.activeMinutes, kcal: d.kcal, km: d.distanceKm,
+    }).filter(([, v]) => v !== null))]));
     Object.assign(fm, {
-      month, days: days.length,
+      month, days: days.length, daily,
       ...(avgSteps !== null ? { avg_steps: avgSteps } : {}),
       ...(avgSleep !== null ? { avg_sleep_min: avgSleep } : {}),
       summary: `${month.replace("-", "年").replace(/^(\d+年)0?/, "$1")}月の健康記録（${days.length} 日・平均歩数 ${n(avgSteps)}・平均睡眠 ${hm(avgSleep)}）`,

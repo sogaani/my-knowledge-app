@@ -65,10 +65,10 @@ kubectl -n my-knowledge rollout restart deploy/kb-api
 ### How the worker authenticates
 1. The Mac worker sends `CF-Access-Client-Id` / `CF-Access-Client-Secret` (the `kb-worker` token) and `Authorization: Bearer $WORKER_TOKEN`.
 2. Cloudflare Access matches the `worker` policy and forwards the request with a signed `Cf-Access-Jwt-Assertion` whose `common_name` is the token's Client ID.
-3. The API (`apps/api/src/auth.ts`) verifies the JWT against the team's JWKS (issuer + `CF_ACCESS_AUD`), checks `common_name` == `WORKER_SERVICE_TOKEN_NAME`, then requires the matching `WORKER_TOKEN`. Worker routes reject users with 403. The worker may also `POST /api/jobs` (that is how the launchd schedules in the data repo enqueue `ingest` / `skill` runs via `90_system/scripts/enqueue.sh`).
+3. The API (`apps/api/src/auth.ts`) verifies the JWT against the team's JWKS (issuer + `CF_ACCESS_AUD`), checks `common_name` == `WORKER_SERVICE_TOKEN_NAME`, then requires the matching `WORKER_TOKEN`. Worker routes reject users with 403. The worker may also `POST /api/jobs` (that is how the launchd schedules in the data repo enqueue `ingest` / `skill` runs via `900_system/scripts/enqueue.sh`).
 
 ### How the Gmail pusher (Apps Script) authenticates
-Same three steps with the `kb-ingest` token and `Authorization: Bearer $INGEST_TOKEN`; the JWT's `common_name` must equal `INGEST_SERVICE_TOKEN_NAME`. The resulting principal is `service`, which is accepted **only** by `POST /api/inbox` (every other route answers 403), so a leaked script property cannot read notes, claim jobs or trigger syncs. Paste these into the Apps Script project (Project Settings → Script Properties), see `my-knowledge/90_system/gas/emailfilter/README.md`:
+Same three steps with the `kb-ingest` token and `Authorization: Bearer $INGEST_TOKEN`; the JWT's `common_name` must equal `INGEST_SERVICE_TOKEN_NAME`. The resulting principal is `service`, which is accepted **only** by `POST /api/inbox` (every other route answers 403), so a leaked script property cannot read notes, claim jobs or trigger syncs. Paste these into the Apps Script project (Project Settings → Script Properties), see `my-knowledge/900_system/gas/emailfilter/README.md`:
 ```
 kubectl -n my-knowledge get secret kb-ingest -o jsonpath='{.data.cloudflareClientId}' | base64 -d    # → CF_ACCESS_CLIENT_ID
 kubectl -n my-knowledge get secret kb-ingest -o jsonpath='{.data.cloudflareSecretKey}' | base64 -d   # → CF_ACCESS_CLIENT_SECRET
@@ -92,7 +92,7 @@ Render locally: `helm template kb-api deploy/helm/kb-api -n my-knowledge`.
 - Delete the hand-made Access application and `kb-worker` service token in the dashboard; the operator creates its own (new Client ID/Secret → update the Mac `.env`).
 - The Deployment selector changed (`app: kb-api` → `app.kubernetes.io/*`) and selectors are immutable: `kubectl -n my-knowledge delete deploy/kb-api` before the first sync.
 - Remove the private connector: `kubectl -n my-knowledge delete deploy/cloudflared secret/cloudflared`, and delete the old public hostname from that tunnel in the Cloudflare dashboard (the ingress controller recreates it on its own tunnel).
-- The `kb-data` PVC keeps its name, so Argo adopts it with the cloned repo intact. Old SQLite files on it (`app/jobs.sqlite*`, `kb/90_system/cache/kb.sqlite*`) are no longer used and can be deleted.
+- The `kb-data` PVC keeps its name, so Argo adopts it with the cloned repo intact. Old SQLite files on it (`app/jobs.sqlite*`, `kb/900_system/cache/kb.sqlite*`) are no longer used and can be deleted.
 
 ## 4. Mac worker
 ```
@@ -102,12 +102,12 @@ kubectl -n my-knowledge get secret kb-worker -o jsonpath='{.data.cloudflareSecre
 kubectl -n my-knowledge get secret kb-api -o jsonpath='{.data.WORKER_TOKEN}' | base64 -d             # → WORKER_TOKEN
 bun run worker            # try it in the foreground first
 ```
-Keep it running with launchd. **The launchd registration lives in the data repo, not here**: `my-knowledge/90_system/launchd/com.my-knowledge.worker.plist` (label `com.my-knowledge.worker`) is installed together with the schedule agents (daily ingest, weekly recommend/moneytree, monthly review/audit/maintain) by `my-knowledge/90_system/scripts/launchd.sh`. This repo only provides the worker code and its `.env`.
+Keep it running with launchd. **The launchd registration lives in the data repo, not here**: `my-knowledge/900_system/launchd/com.my-knowledge.worker.plist` (label `com.my-knowledge.worker`) is installed together with the schedule agents (daily ingest, weekly recommend/moneytree, monthly review/audit/maintain) by `my-knowledge/900_system/scripts/launchd.sh`. This repo only provides the worker code and its `.env`.
 ```
-~/git/my-knowledge/90_system/scripts/launchd.sh                 # install / reinstall everything (also removes the legacy local.kb-worker agent)
-tail -f ~/git/my-knowledge/90_system/logs/worker.log
+~/git/my-knowledge/900_system/scripts/launchd.sh                 # install / reinstall everything (also removes the legacy local.kb-worker agent)
+tail -f ~/git/my-knowledge/900_system/logs/worker.log
 launchctl kickstart -k gui/$(id -u)/com.my-knowledge.worker       # restart after editing .env or pulling new worker code
-~/git/my-knowledge/90_system/scripts/launchd.sh uninstall
+~/git/my-knowledge/900_system/scripts/launchd.sh uninstall
 ```
 The plist runs the worker through `bash -l`, so the agent CLI (claude/codex/gemini), bun, git and git-crypt must be on the login shell's PATH.
 
@@ -123,4 +123,4 @@ The plist runs the worker through `bash -l`, so the agent CLI (claude/codex/gemi
 
 ## Semantic search
 
-Vectors (Ollama bge-m3) and the Lindera BM25 index live on the Mac in `90_system/cache/lance/`. The pod keeps `KB_EMBED=off` and serves `GET /api/search` by handing a `search` job to the worker, falling back to the SQLite keyword search after `SEARCH_TIMEOUT_MS`. See `docs/search.md`.
+Vectors (Ollama bge-m3) and the Lindera BM25 index live on the Mac in `900_system/cache/lance/`. The pod keeps `KB_EMBED=off` and serves `GET /api/search` by handing a `search` job to the worker, falling back to the SQLite keyword search after `SEARCH_TIMEOUT_MS`. See `docs/search.md`.

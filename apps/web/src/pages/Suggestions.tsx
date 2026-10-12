@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 
 interface Item { id: string; section: string; line: string; title: string; reacted?: string; url?: string }
 
-/** Parses 30_gold/37_suggestions.md: "- [ ] **Title** — ... <!-- id: x[, reaction: y] -->" under "## 本" / "## 映画・ドラマ" / "## 記事". */
+/** Parses 300_gold/307_suggestions.md: "- [ ] **Title** — ... <!-- id: x[, reaction: y] -->" under "## 本" / "## 映画・ドラマ" / "## 記事". */
 function parse(md: string): { updated: string; items: Item[] } {
   const items: Item[] = []; let section = "";
   const updated = /（(\d{4}-\d{2}-\d{2}) 更新）/.exec(md)?.[1] ?? "";
@@ -27,7 +27,7 @@ function parse(md: string): { updated: string; items: Item[] } {
 export default function Suggestions() {
   const [data, setData] = useState<{ updated: string; items: Item[] } | null>(null);
   const [err, setErr] = useState<unknown>(null);
-  const load = () => api.gold("37_suggestions").then((g) => setData(parse(g.markdown))).catch(setErr);
+  const load = () => api.gold("307_suggestions").then((g) => setData(parse(g.markdown))).catch(setErr);
   useEffect(() => { load(); }, []);
   const refresh = useAction(() => api.runJob("recommend"), { success: (j) => `recommend を投入しました（${j.id.slice(0, 8)}）。終わったら再読み込みしてください` });
   if (err) return <Err e={err} />;

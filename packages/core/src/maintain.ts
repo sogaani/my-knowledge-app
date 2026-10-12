@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
 import type { Database } from "bun:sqlite";
-import { today, type KbConfig } from "./config";
+import { SILVER_PREFIX, WORK_FOLDER, today, type KbConfig } from "./config";
 import { parseNote, stringifyNote } from "./frontmatter";
 import { walkNotes, type Note } from "./notes";
 import type { SchemaRegistry } from "./schema";
@@ -17,7 +17,7 @@ export function validateAll(cfg: KbConfig, reg: SchemaRegistry): Issue[] {
   for (const n of notes) {
     for (const e of reg.validate(n.fm)) issues.push({ level: "error", path: n.path, msg: e });
     const def = reg.get(n.type);
-    if (def && !n.path.startsWith(def.folder + "/") && !n.path.startsWith("20_silver/27_work/")) {
+    if (def && !n.path.startsWith(def.folder + "/") && !n.path.startsWith(WORK_FOLDER + "/")) {
       issues.push({ level: "error", path: n.path, msg: `type ${n.type} belongs in ${def.folder}/` });
     }
     if (!n.summary) issues.push({ level: "warn", path: n.path, msg: "summary is empty" });
@@ -91,7 +91,7 @@ export function lint(cfg: KbConfig, db: Database, opts: { staleDays?: number } =
   const days = (iso: string) => (now - new Date(iso).getTime()) / 86400000;
   const inboxStale = listInbox(cfg).filter((f) => days(statSync(f).mtime.toISOString()) > 3).map((f) => basename(f));
   const linked = new Set((db.query("SELECT DISTINCT dst FROM links").all() as { dst: string }[]).map((r) => r.dst));
-  const rows = db.query("SELECT path, type, status, updated, fm FROM notes WHERE archived=0 AND path LIKE '20_silver/%'").all() as
+  const rows = db.query("SELECT path, type, status, updated, fm FROM notes WHERE archived=0 AND path LIKE ?").all(`${SILVER_PREFIX}%`) as
     { path: string; type: string; status: string; updated: string; fm: string }[];
   const orphans: string[] = [], stale: string[] = [], renewals: string[] = [], archiveCandidates: string[] = [];
   for (const r of rows) {

@@ -6,7 +6,7 @@ import type { KbConfig } from "./config";
 
 export interface TypeDef {
   type: string;
-  folder: string; // relative to root, e.g. 20_silver/24_books
+  folder: string; // relative to root, e.g. 200_silver/204_books
   entity: "file" | "folder";
   statuses: string[];
   fields: string[];

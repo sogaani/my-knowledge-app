@@ -22,7 +22,7 @@ import { ingestFile } from "./bronze";
 describe("ingestFile", () => {
   test("re-ingesting identical content the same day removes the inbox copy", () => {
     const root = mkdtempSync(join(tmpdir(), "kb-bronze-"));
-    const cfg = { root, bronze: join(root, "10_bronze") } as unknown as Parameters<typeof ingestFile>[0];
+    const cfg = { root, bronze: join(root, "100_bronze") } as unknown as Parameters<typeof ingestFile>[0];
     const a = join(root, "a.md"); writeFileSync(a, "same content");
     const first = ingestFile(cfg, a);
     expect(existsSync(a)).toBe(false);

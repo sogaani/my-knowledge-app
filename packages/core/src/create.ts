@@ -11,7 +11,7 @@ export interface CreateOpts {
   title: string;
   set?: Record<string, unknown>;
   force?: boolean;
-  folder?: string; // override target subfolder (e.g. for work projects: 20_silver/27_work)
+  folder?: string; // override target subfolder (e.g. for work projects: 200_silver/207_work)
 }
 
 export class DuplicateError extends Error {

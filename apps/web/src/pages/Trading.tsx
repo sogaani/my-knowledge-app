@@ -12,12 +12,12 @@ const PUSH_LABEL: Record<PushState, string> = {
   denied: "通知がブラウザでブロックされています", off: "通知を有効化", on: "通知を解除",
 };
 
-/** 売買: renders 30_gold/38_trading.md (latest trade_plan sheet + recent sheets + portfolio snapshot). */
+/** 売買: renders 300_gold/308_trading.md (latest trade_plan sheet + recent sheets + portfolio snapshot). */
 export default function Trading() {
   const [md, setMd] = useState<string | null>(null);
   const [err, setErr] = useState<unknown>(null);
   const [push, setPush] = useState<PushState | null>(null);
-  const fetchMd = () => api.gold("38_trading").then((g) => setMd(g.markdown.replace(/^<!--[\s\S]*?-->\n?/, "")));
+  const fetchMd = () => api.gold("308_trading").then((g) => setMd(g.markdown.replace(/^<!--[\s\S]*?-->\n?/, "")));
   useEffect(() => { fetchMd().catch(setErr); pushState().then(setPush).catch(() => setPush("unsupported")); }, []);
   const reload = useAction(async () => { await fetchMd(); setErr(null); });
   const run = useAction(() => api.runJob("skill", { name: "trade-plan" }), { success: (j) => `ジョブ ${j.id.slice(0, 8)} を投入しました。終わると通知が届きます（数分）` });
@@ -42,7 +42,7 @@ export default function Trading() {
         {push === "on" && <Button variant="ghost" size="sm" loading={testPush.pending} onClick={() => testPush.run()}>{!testPush.pending && <SendIcon data-icon="inline-start" />}テスト通知</Button>}
       </Toolbar>
       <Err e={err} />
-      {md === null ? (!err && <Loading rows={8} />) : <Md text={md.replace(/^# .*\n/, "")} basePath="30_gold/38_trading.md" />}
+      {md === null ? (!err && <Loading rows={8} />) : <Md text={md.replace(/^# .*\n/, "")} basePath="300_gold/308_trading.md" />}
     </>
   );
 }

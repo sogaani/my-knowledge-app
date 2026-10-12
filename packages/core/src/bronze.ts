@@ -44,7 +44,7 @@ export function bronzeDir(cfg: KbConfig, id: string): string {
   return join(cfg.bronze, y, m, id);
 }
 
-/** Move a local file (usually from 00_inbox) into Bronze. Returns meta. */
+/** Move a local file (usually from 000_inbox) into Bronze. Returns meta. */
 export function ingestFile(cfg: KbConfig, src: string, opts: { kind?: BronzeKind; keep?: boolean; title?: string; sourceLabel?: string } = {}): BronzeMeta {
   const buf = readFileSync(src);
   const hash = sha256(buf);

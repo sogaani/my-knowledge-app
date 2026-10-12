@@ -34,7 +34,7 @@
 
 ## 4. 機微情報
 
-- データリポジトリの 22/23/27 ドメインは git-crypt で暗号化されている。テスト fixture・ログ・エラーメッセージにその内容を出さない。
+- データリポジトリの 202/203/207 ドメインは git-crypt で暗号化されている。テスト fixture・ログ・エラーメッセージにその内容を出さない。
 - トークン・鍵（`WORKER_TOKEN`, `INGEST_TOKEN`, `VAPID_PRIVATE_KEY`, deploy key, git-crypt key, Access のサービストークン）はコミットしない。k8s Secret と 1Password に置く。
 
 ## 5. スキル

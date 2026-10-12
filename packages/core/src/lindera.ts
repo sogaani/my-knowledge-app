@@ -5,6 +5,7 @@
  */
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { dlopen, FFIType } from "bun:ffi";
 import type { KbConfig } from "./config";
 
 /** @lancedb/lancedb 0.40.0 bundles lindera 3.0.7. Update both together (see .agents/skills/upgrade-lancedb). */
@@ -23,6 +24,21 @@ export function linderaDictName(tokenizer: string): string | null {
 /** Point Lance at the repo-local language model home unless the user set one. Call before any FTS work. */
 export function applyLanguageModelHome(cfg: KbConfig) {
   if (!process.env.LANCE_LANGUAGE_MODEL_HOME) process.env.LANCE_LANGUAGE_MODEL_HOME = cfg.langModelHome;
+  setNativeEnv("LANCE_LANGUAGE_MODEL_HOME", process.env.LANCE_LANGUAGE_MODEL_HOME);
+}
+
+/**
+ * Bun's process.env is not mirrored into the C environment, and Lance's native code reads the variable with getenv:
+ * without this it falls back to ~/Library/Application Support/lance and the Lindera tokenizer is not found.
+ */
+function setNativeEnv(key: string, value: string) {
+  try {
+    const libc = dlopen(process.platform === "darwin" ? "libc.dylib" : "libc.so.6", {
+      setenv: { args: [FFIType.cstring, FFIType.cstring, FFIType.i32], returns: FFIType.i32 },
+    });
+    libc.symbols.setenv(Buffer.from(`${key}\0`), Buffer.from(`${value}\0`), 1);
+    libc.close();
+  } catch { /* no libc to call (unusual platform): Lance then needs the variable set by the caller */ }
 }
 
 export function linderaStatus(cfg: KbConfig, tokenizer = cfg.embedding.tokenizer): LinderaStatus {

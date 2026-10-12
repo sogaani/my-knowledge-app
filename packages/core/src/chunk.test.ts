@@ -3,7 +3,7 @@ import { chunkNote, noteHash, splitLong } from "./chunk";
 import type { Note } from "./notes";
 
 const note = (body: string, fm: Record<string, unknown> = {}): Note => ({
-  path: "20_silver/24_books/十角館の殺人.md", absPath: "", type: "book", title: "十角館の殺人", status: "done", summary: "孤島の館で起きる連続殺人",
+  path: "200_silver/204_books/十角館の殺人.md", absPath: "", type: "book", title: "十角館の殺人", status: "done", summary: "孤島の館で起きる連続殺人",
   tags: ["mystery", "closed-circle"], fm: { type: "book", title: "十角館の殺人", author: "綾辻行人", rating: 5, sources: ["x"], ...fm }, body, archived: false, mtime: 0, attachments: [],
 });
 
@@ -36,10 +36,10 @@ describe("chunkNote", () => {
   });
 
   test("attachments are chunked under the note with a prefixed heading", () => {
-    const cs = chunkNote(note("本文"), [{ path: "20_silver/26_projects/2026-10_x/log.md", body: "## 2026-10-09\n\n開始した。" }]);
+    const cs = chunkNote(note("本文"), [{ path: "200_silver/206_projects/2026-10_x/log.md", body: "## 2026-10-09\n\n開始した。" }]);
     const att = cs.find((c) => c.path.endsWith("log.md"))!;
     expect(att.heading).toBe("log / 2026-10-09");
-    expect(att.notePath).toBe("20_silver/24_books/十角館の殺人.md");
+    expect(att.notePath).toBe("200_silver/204_books/十角館の殺人.md");
   });
 
   test("headings inside code fences are ignored", () => {

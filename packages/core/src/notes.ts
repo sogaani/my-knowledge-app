@@ -21,7 +21,7 @@ export interface Note {
 
 const SKIP = new Set([".gitkeep", ".DS_Store"]);
 
-/** Walk 20_silver and 30_gold and yield every note (README.md of folder entities counts as the note). */
+/** Walk 200_silver and 300_gold and yield every note (README.md of folder entities counts as the note). */
 export function* walkNotes(cfg: KbConfig, opts: { includeArchive?: boolean; dirs?: string[] } = {}): Generator<Note> {
   const dirs = opts.dirs ?? [cfg.silver, cfg.gold];
   for (const dir of dirs) {

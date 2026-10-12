@@ -7,7 +7,7 @@ Silver ノートを chunk 単位で LanceDB に入れ、Ollama の dense ベク�
 Mac                                                k8s API pod (KB_EMBED=off, LanceDB を読まない)
 ┌─────────────────────────────────────────┐        ┌───────────────────────────────────────┐
 │ Ollama :11434  bge-m3 (dense 1024)      │        │ GET /api/search?q=&mode=hybrid         │
-│ 90_system/cache/lance/                  │        │   → createJob("search") → 最長 8s 待つ │
+│ 900_system/cache/lance/                  │        │   → createJob("search") → 最長 8s 待つ │
 │   chunks (vector + FTS lindera/ipadic)  │  job   │   → 応答なし/失敗 → SQLite keyword +   │
 │   meta.json (model/dim/tokenizer/ver)   │◀───────┤     degraded                            │
 │   language_models/lindera/ipadic/       │ result │ GET /api/notes?text=  (SQLite FTS5, 従来)│

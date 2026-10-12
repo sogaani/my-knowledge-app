@@ -6,7 +6,7 @@ import { bronzeDir, walkBronze } from "./bronze";
 /** Append-only rsync of Bronze to dest. Never deletes on the destination. */
 export async function backupBronze(cfg: KbConfig, opts: { dest?: string; dryRun?: boolean }): Promise<{ dest: string; output: string }> {
   const dest = opts.dest ?? cfg.local.backup?.dest;
-  if (!dest) throw new Error("no backup destination: pass --dest or set [backup] dest in 90_system/config.local.toml");
+  if (!dest) throw new Error("no backup destination: pass --dest or set [backup] dest in 900_system/config.local.toml");
   mkdirSync(dest, { recursive: true });
   const args = ["rsync", "-a", "--ignore-existing", "--itemize-changes", "--human-readable", "--stats"];
   if (opts.dryRun) args.push("--dry-run");

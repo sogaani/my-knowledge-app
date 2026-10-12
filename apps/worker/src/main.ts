@@ -5,7 +5,7 @@
  */
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { loadConfig, git, gitCommitPush, openDb, indexNotes, parseFilters, search, makeEmbedder, type SearchMode } from "@kb/core";
+import { LAYOUT, SILVER_PREFIX, loadConfig, git, gitCommitPush, openDb, indexNotes, parseFilters, search, makeEmbedder, type SearchMode } from "@kb/core";
 
 const API = (process.env.KB_API_URL ?? "http://127.0.0.1:8787").replace(/\/$/, "");
 const cfg = loadConfig(process.env.KB_ROOT);
@@ -29,7 +29,7 @@ const log = (id: string, text: string) => api(`/jobs/${id}/log`, { method: "POST
 
 /** Run run-agent.sh and stream its output to the job log. Returns full stdout. */
 async function runAgent(jobId: string, args: string[]): Promise<{ out: string; code: number }> {
-  const script = join(cfg.root, "90_system", "scripts", "run-agent.sh");
+  const script = join(cfg.root, LAYOUT.system, "scripts", "run-agent.sh");
   const proc = Bun.spawn(["bash", script, ...args], { cwd: cfg.root, stdout: "pipe", stderr: "pipe", env: { ...process.env, KB_ROOT: cfg.root } });
   let out = "", buf = "";
   const flush = setInterval(() => { if (buf) { log(jobId, buf); buf = ""; } }, 2000);
@@ -49,7 +49,7 @@ async function kb(...args: string[]): Promise<string> {
 }
 
 async function commitAll(message: string): Promise<string | null> {
-  return gitCommitPush(cfg.root, ["20_silver", "30_gold"], message, { author: "kb-worker <kb-worker@local>" });
+  return gitCommitPush(cfg.root, [LAYOUT.silver, LAYOUT.gold], message, { author: "kb-worker <kb-worker@local>" });
 }
 
 async function stageInbox(job: Job) {
@@ -130,7 +130,7 @@ function tail(s: string, n = 2000) { return s.length > n ? "…" + s.slice(-n) :
 function parseAnswer(out: string): { answer: string; sources: string[] } {
   const i = out.lastIndexOf("根拠:");
   if (i === -1) return { answer: out.trim(), sources: [] };
-  const sources = out.slice(i).split("\n").slice(1).map((l) => l.replace(/^[-*\s]+/, "").trim()).filter((l) => /^20_silver\//.test(l));
+  const sources = out.slice(i).split("\n").slice(1).map((l) => l.replace(/^[-*\s]+/, "").trim()).filter((l) => l.startsWith(SILVER_PREFIX));
   return { answer: out.slice(0, i).trim(), sources };
 }
 

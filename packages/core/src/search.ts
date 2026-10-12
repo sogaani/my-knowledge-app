@@ -4,7 +4,7 @@
  * Falls back to the SQLite trigram search when the vector store or Ollama is unavailable.
  */
 import type { Database } from "bun:sqlite";
-import type { KbConfig } from "./config";
+import { SILVER_PREFIX, type KbConfig } from "./config";
 import type { NoteRow } from "./db";
 import { runQuery, type Filter } from "./query";
 import type { Embedder } from "./embed";
@@ -148,7 +148,7 @@ export function matchFilter(row: NoteRow, fm: Record<string, unknown>, f: Filter
 /** SQLite trigram/LIKE search shaped like hybrid hits. Used as fallback here and directly by the API pod (no Lance there). */
 export function keywordSearch(db: Database, q: string, filters: Filter[], opts: Pick<SearchOpts, "includeArchive" | "limit">): SearchHit[] {
   const res = runQuery(db, { filters, text: q || undefined, includeArchive: opts.includeArchive, limit: opts.limit ?? 10 });
-  return res.filter((r) => r.path.startsWith("20_silver/")).map((r) => ({
+  return res.filter((r) => r.path.startsWith(SILVER_PREFIX)).map((r) => ({
     path: r.path, type: r.type, title: r.title, status: r.status, summary: r.summary, tags: r.tags, updated: r.updated, archived: r.archived,
     score: 0, matches: [{ path: r.path, heading: "", snippet: r.summary, spoiler: false, via: ["keyword"] }],
   }));

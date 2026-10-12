@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import {
   runQuery, parseFilters, readNote, patchFrontmatter, createNote, DuplicateError, gitCommitPush, lint, extractLinks,
-  keywordSearch, type SearchResponse, type SearchMode,
+  keywordSearch, LAYOUT, GOLD, SILVER_PREFIX, GOLD_PREFIX, type SearchResponse, type SearchMode,
 } from "@kb/core";
 import { env } from "./env";
 import { authenticate, requireUser, requireWorker, requireInboxWriter, requireUserOrWorker, type Principal } from "./auth";
@@ -23,7 +23,7 @@ api.use("*", authenticate);
 
 const safePath = (p: string) => {
   const rel = p.replace(/^\/+/, "");
-  if (rel.includes("..") || !(rel.startsWith("20_silver/") || rel.startsWith("30_gold/"))) return null;
+  if (rel.includes("..") || !(rel.startsWith(SILVER_PREFIX) || rel.startsWith(GOLD_PREFIX))) return null;
   return rel;
 };
 async function commitKb(paths: string[], message: string) {
@@ -37,10 +37,10 @@ async function commitKb(paths: string[], message: string) {
 api.get("/me", (c) => c.json({ principal: c.get("principal"), kbRoot: cfg.root }));
 
 api.get("/home", requireUser, async (c) => {
-  const counts = db.query("SELECT type, COUNT(*) c FROM notes WHERE archived=0 AND path LIKE '20_silver/%' GROUP BY type").all() as { type: string; c: number }[];
+  const counts = db.query("SELECT type, COUNT(*) c FROM notes WHERE archived=0 AND path LIKE ? GROUP BY type").all(`${SILVER_PREFIX}%`) as { type: string; c: number }[];
   const subs = runQuery(db, { filters: [{ field: "type", op: "=", value: "subscription" }, { field: "status", op: "=", value: "active" }], limit: 1000 });
   const monthly = subs.reduce((a, s) => a + (s.fm.cycle === "yearly" ? Number(s.fm.price ?? 0) / 12 : Number(s.fm.price ?? 0)), 0);
-  const recent = runQuery(db, { filters: [], orderBy: "-updated", limit: 12 }).filter((n) => n.path.startsWith("20_silver/"));
+  const recent = runQuery(db, { filters: [], orderBy: "-updated", limit: 12 }).filter((n) => n.path.startsWith(SILVER_PREFIX));
   const projects = runQuery(db, { filters: [{ field: "type", op: "=", value: "project" }, { field: "status", op: "=", value: "active" }], limit: 50 });
   const books = runQuery(db, { filters: [{ field: "type", op: "=", value: "book" }], limit: 5000 });
   const media = runQuery(db, { filters: [{ field: "type", op: "=", value: "media" }], limit: 5000 });
@@ -59,7 +59,7 @@ api.get("/notes", requireUser, (c) => {
   if (q.type) filters.push({ field: "type", op: "=", value: q.type });
   if (q.status) filters.push({ field: "status", op: "=", value: q.status });
   const res = runQuery(db, { filters, text: q.text || undefined, includeArchive: q.archive === "1", limit: Number(q.limit ?? 200), orderBy: q.order || undefined });
-  return c.json(res.filter((n) => n.path.startsWith("20_silver/")));
+  return c.json(res.filter((n) => n.path.startsWith(SILVER_PREFIX)));
 });
 
 /**
@@ -115,7 +115,7 @@ api.get("/notes/*", requireUser, (c) => {
 
 api.patch("/notes/*", requireUser, async (c) => {
   const rel = safePath(c.req.path.replace(/^\/api\/notes\//, ""));
-  if (!rel || !rel.startsWith("20_silver/")) return c.json({ error: "bad path" }, 400);
+  if (!rel || !rel.startsWith(SILVER_PREFIX)) return c.json({ error: "bad path" }, 400);
   const abs = join(cfg.root, rel);
   if (!existsSync(abs)) return c.json({ error: "not found" }, 404);
   const body = (await c.req.json()) as { fm?: Record<string, unknown>; append?: { section: string; line: string } };
@@ -154,7 +154,7 @@ api.get("/gold/:name", requireUser, (c) => {
   return c.json({ name, markdown: readFileSync(abs, "utf8") });
 });
 
-/** Suggestions live in 30_gold/37_suggestions.md as checklist lines with <!-- id: x --> markers. */
+/** Suggestions live in 300_gold/307_suggestions.md as checklist lines with <!-- id: x --> markers. */
 // ---- Web Push: the browser subscribes here; the worker's job completion fans out (see /worker/jobs/:id/done) ----
 api.get("/push/vapid", requireUser, (c) => c.json({ publicKey: pushEnabled() ? env.vapidPublicKey : null, subscriptions: listPushSubscriptions().length }));
 api.post("/push/subscribe", requireUser, async (c) => {
@@ -172,14 +172,14 @@ api.post("/push/test", requireUser, async (c) => c.json(await sendPushToAll({ ti
 
 api.post("/suggestions/react", requireUser, async (c) => {
   const { id, reaction, title, type } = (await c.req.json()) as { id: string; reaction: "read" | "dismissed"; title?: string; type?: "book" | "media" };
-  const abs = join(cfg.gold, "37_suggestions.md");
+  const abs = join(cfg.gold, GOLD.suggestions);
   if (!existsSync(abs)) return c.json({ error: "no suggestions" }, 404);
   const text = readFileSync(abs, "utf8");
   if (!id) return c.json({ error: "id required" }, 400);
   const re = new RegExp(`<!--\\s*id:\\s*${id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[^>]*-->`);
   if (!re.test(text)) return c.json({ error: "id not found" }, 404);
   writeFileSync(abs, text.replace(re, `<!-- id: ${id}, reaction: ${reaction} -->`).replace(new RegExp(`- \\[ \\]([^\\n]*<!-- id: ${id},)`), "- [x]$1"));
-  const paths = ["30_gold/37_suggestions.md"];
+  const paths = [`${GOLD_PREFIX}${GOLD.suggestions}`];
   let created: string | null = null;
   if (reaction === "read" && title && type) {
     try { created = createNote(cfg, reg, db, { type, title, set: { status: "want", summary: "おすすめから追加" } }); paths.push(created); } catch {}
@@ -258,7 +258,7 @@ api.post("/chat", requireUser, async (c) => {
 api.post("/sync", requireUser, async (c) => c.json(await sync("manual")));
 api.post("/build", requireUser, async (c) => {
   const files = rebuildGold();
-  const commit = await commitKb(["30_gold"], "web: kb build").catch((e) => ({ error: String(e) }));
+  const commit = await commitKb([LAYOUT.gold], "web: kb build").catch((e) => ({ error: String(e) }));
   return c.json({ files, commit });
 });
 

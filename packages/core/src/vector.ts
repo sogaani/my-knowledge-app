@@ -1,6 +1,6 @@
 /**
  * LanceDB store: one row per chunk of a Silver note, with a dense vector (Ollama) and a BM25
- * full-text index tokenized by Lindera (Japanese) — see lindera.ts. Lives in 90_system/cache/lance (gitignored).
+ * full-text index tokenized by Lindera (Japanese) — see lindera.ts. Lives in 900_system/cache/lance (gitignored).
  * Incremental: a per-note content hash decides what gets re-embedded.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";

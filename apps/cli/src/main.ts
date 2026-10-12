@@ -63,7 +63,7 @@ switch (cmd) {
   case "new": {
     const { f, pos } = flags(argv);
     const [type, title] = pos;
-    if (!type || !title) die('usage: kb new <type> "<title>" [--set k=v ...] [--force] [--folder 20_silver/27_work]');
+    if (!type || !title) die('usage: kb new <type> "<title>" [--set k=v ...] [--force] [--folder 200_silver/207_work]');
     try {
       const p = createNote(cfg, reg, db(), { type, title, set: collectSets(argv), force: !!f.force, folder: f.folder as string | undefined });
       console.log(p);
@@ -268,7 +268,7 @@ switch (cmd) {
   new <type> "<title>" [--set k=v]   create a Silver note from its template (duplicate-checked)
   set <path> --set k=v               patch frontmatter (updated= today)
   append <path> "<line>" [--section] append a dated bullet to a section
-  inbox                              list 00_inbox
+  inbox                              list 000_inbox
   ingest <path|url> [--kind] [--keep] | --all   move into Bronze, print id
   source <id> [--full]               Bronze meta + excerpt (logged)
   processed <id> <silver-path>...    record which Silver notes came from a Bronze item
@@ -277,7 +277,7 @@ switch (cmd) {
   search "<query>" [type=book ...] [--mode hybrid|vector|keyword] [--limit 10] [--include-archive] [--spoilers] [--json]
                                      semantic + keyword search (LanceDB; Ollama for vectors)
   embed [--full] | embed --check | embed --setup   (re)embed Silver into LanceDB | status | install Lindera dict + pull model
-  index [--full] | build             refresh SQLite + LanceDB index | regenerate 30_gold
+  index [--full] | build             refresh SQLite + LanceDB index | regenerate 300_gold
   archive <path> [--status done]     move to _archive/ and rewrite links
   validate [--quiet] | lint [--json]
   backup [--dest d] [--dry-run] | prune [--older-than 3] [--type web] [--dry-run]`);

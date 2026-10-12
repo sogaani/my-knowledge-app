@@ -37,11 +37,11 @@ const write = (rel: string, fm: Record<string, unknown>, body: string) => {
 beforeAll(() => {
   root = mkdtempSync(join(tmpdir(), "kb-vec-"));
   process.env.KB_FTS_TOKENIZER = "icu"; // no dictionary needed in CI
-  write("20_silver/24_books/十角館の殺人.md", { type: "book", title: "十角館の殺人", status: "done", tags: ["mystery"], rating: 5, summary: "孤島の館で起きる連続殺人", updated: "2026-10-01" },
+  write("200_silver/204_books/十角館の殺人.md", { type: "book", title: "十角館の殺人", status: "done", tags: ["mystery"], rating: 5, summary: "孤島の館で起きる連続殺人", updated: "2026-10-01" },
     "## 感想\n\n綾辻行人の代表作。クローズドサークルの傑作。\n\n> [!spoiler]- 真相\n> 犯人は守須。");
-  write("20_silver/24_books/ラーメン本.md", { type: "book", title: "東京ラーメン百選", status: "reading", tags: ["food"], rating: 3, summary: "東京のラーメン店ガイド", updated: "2026-10-02" },
+  write("200_silver/204_books/ラーメン本.md", { type: "book", title: "東京ラーメン百選", status: "reading", tags: ["food"], rating: 3, summary: "東京のラーメン店ガイド", updated: "2026-10-02" },
     "## メモ\n\n東京タワー近くの店が良かった。");
-  write("20_silver/25_media/_archive/old.md", { type: "media", title: "古い映画", status: "done", tags: [], summary: "アーカイブ済みの映画", updated: "2020-01-01" }, "殺人事件の映画。");
+  write("200_silver/205_media/_archive/old.md", { type: "media", title: "古い映画", status: "done", tags: [], summary: "アーカイブ済みの映画", updated: "2020-01-01" }, "殺人事件の映画。");
   cfg = loadConfig(root);
 });
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -66,14 +66,14 @@ describe("VectorStore + embedNotes", () => {
     expect(s2.embedded).toBe(0);
     expect(s2.skipped).toBe(3);
 
-    write("20_silver/24_books/ラーメン本.md", { type: "book", title: "東京ラーメン百選", status: "done", tags: ["food"], rating: 4, summary: "東京のラーメン店ガイド", updated: "2026-10-03" }, "## メモ\n\n読了。");
-    rmSync(join(root, "20_silver/25_media/_archive/old.md"));
+    write("200_silver/204_books/ラーメン本.md", { type: "book", title: "東京ラーメン百選", status: "done", tags: ["food"], rating: 4, summary: "東京のラーメン店ガイド", updated: "2026-10-03" }, "## メモ\n\n読了。");
+    rmSync(join(root, "200_silver/205_media/_archive/old.md"));
     indexNotes(cfg, db);
     const s3 = await embedNotes(cfg, store, emb, {});
     expect(s3.embedded).toBe(1);
     expect(s3.removed).toBe(1);
     const hashes = await store.existingHashes();
-    expect([...hashes.keys()].sort()).toEqual(["20_silver/24_books/ラーメン本.md", "20_silver/24_books/十角館の殺人.md"]);
+    expect([...hashes.keys()].sort()).toEqual(["200_silver/204_books/ラーメン本.md", "200_silver/204_books/十角館の殺人.md"]);
 
     // reopen: meta persisted, FTS index present
     store = await VectorStore.open(cfg);
@@ -88,7 +88,7 @@ describe("VectorStore + embedNotes", () => {
     const kw = await search(cfg, db, "殺人", { mode: "keyword" }, { store, embedder: emb });
     expect(kw.mode).toBe("keyword");
     expect(kw.degraded).toBeUndefined();
-    expect(kw.hits[0].path).toBe("20_silver/24_books/十角館の殺人.md");
+    expect(kw.hits[0].path).toBe("200_silver/204_books/十角館の殺人.md");
     expect(kw.hits[0].matches[0].via).toEqual(["keyword"]);
 
     // spoiler chunk text hidden by default, visible on request
@@ -104,11 +104,11 @@ describe("VectorStore + embedNotes", () => {
 
     const hy = await search(cfg, db, "ラーメン", { mode: "hybrid" }, { store, embedder: emb });
     expect(hy.mode).toBe("hybrid");
-    expect(hy.hits[0].path).toBe("20_silver/24_books/ラーメン本.md");
+    expect(hy.hits[0].path).toBe("200_silver/204_books/ラーメン本.md");
 
     // frontmatter filter evaluated against SQLite
     const f = await search(cfg, db, "殺人", { mode: "keyword", filters: [{ field: "rating", op: ">=", value: "5" }] }, { store, embedder: emb });
-    expect(f.hits.map((h) => h.path)).toEqual(["20_silver/24_books/十角館の殺人.md"]);
+    expect(f.hits.map((h) => h.path)).toEqual(["200_silver/204_books/十角館の殺人.md"]);
     const f2 = await search(cfg, db, "殺人", { mode: "keyword", filters: [{ field: "type", op: "=", value: "media" }] }, { store, embedder: emb });
     expect(f2.hits).toHaveLength(0);
   });
@@ -120,7 +120,7 @@ describe("VectorStore + embedNotes", () => {
     const hy = await search(cfg, db, "殺人", { mode: "hybrid" }, { store, embedder: down });
     expect(hy.mode).toBe("keyword");
     expect(hy.degraded).toContain("ollama unreachable");
-    expect(hy.hits[0].path).toBe("20_silver/24_books/十角館の殺人.md");
+    expect(hy.hits[0].path).toBe("200_silver/204_books/十角館の殺人.md");
     const v = await search(cfg, db, "殺人", { mode: "vector" }, { store, embedder: down });
     expect(v.mode).toBe("keyword");
     expect(v.hits.length).toBeGreaterThan(0);

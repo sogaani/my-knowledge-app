@@ -1,4 +1,6 @@
 import { NavLink, Route, Routes } from "react-router-dom";
+import { Toaster } from "@/components/ui/sonner";
+import { cn } from "@/lib/utils";
 import Home from "./pages/Home";
 import Notes from "./pages/Notes";
 import Note from "./pages/Note";
@@ -14,23 +16,36 @@ const TYPES: [string, string][] = [
   ["project", "プロジェクト"], ["learning", "学習"], ["review", "レビュー"], ["person", "人物"],
 ];
 
+const Item = ({ to, end, children }: { to: string; end?: boolean; children: React.ReactNode }) => (
+  <NavLink
+    to={to}
+    end={end}
+    className={({ isActive }) => cn(
+      "block rounded-md px-2.5 py-1.5 text-sm text-foreground no-underline transition-colors hover:bg-muted hover:no-underline",
+      isActive && "bg-muted font-medium",
+    )}
+  >
+    {children}
+  </NavLink>
+);
+
 export default function App() {
   return (
-    <div className="layout">
-      <nav className="side">
-        <h1>my-knowledge</h1>
-        <NavLink to="/" end>ホーム</NavLink>
-        <NavLink to="/inbox">投げ込み</NavLink>
-        <NavLink to="/chat">チャット</NavLink>
-        <NavLink to="/suggestions">おすすめ</NavLink>
-        <NavLink to="/trading">売買</NavLink>
-        <NavLink to="/note/30_gold/30_market.md">市場メモ</NavLink>
-        <NavLink to="/jobs">ジョブ</NavLink>
-        <div className="group">ノート</div>
-        {TYPES.map(([t, label]) => <NavLink key={t} to={`/notes/${t}`}>{label}</NavLink>)}
-        <NavLink to="/search">検索</NavLink>
+    <div className="grid min-h-screen grid-rows-[auto_1fr] md:grid-cols-[220px_1fr] md:grid-rows-none">
+      <nav className="flex flex-wrap content-start items-start gap-1 border-b px-3 py-2.5 md:sticky md:top-0 md:block md:h-screen md:space-y-0.5 md:overflow-auto md:border-r md:border-b-0 md:px-3.5 md:py-5">
+        <h1 className="mb-1.5 w-full px-2.5 text-[15px] font-semibold tracking-wide md:mb-4">my-knowledge</h1>
+        <Item to="/" end>ホーム</Item>
+        <Item to="/inbox">投げ込み</Item>
+        <Item to="/chat">チャット</Item>
+        <Item to="/suggestions">おすすめ</Item>
+        <Item to="/trading">売買</Item>
+        <Item to="/note/30_gold/30_market.md">市場メモ</Item>
+        <Item to="/jobs">ジョブ</Item>
+        <div className="hidden px-2.5 pt-3.5 text-[11px] text-muted-foreground uppercase md:block">ノート</div>
+        {TYPES.map(([t, label]) => <Item key={t} to={`/notes/${t}`}>{label}</Item>)}
+        <Item to="/search">検索</Item>
       </nav>
-      <main>
+      <main className="min-w-0 max-w-[1100px] p-4 md:px-8 md:py-6">
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/inbox" element={<Inbox />} />
@@ -43,6 +58,7 @@ export default function App() {
           <Route path="/note/*" element={<Note />} />
         </Routes>
       </main>
+      <Toaster position="bottom-right" richColors closeButton />
     </div>
   );
 }

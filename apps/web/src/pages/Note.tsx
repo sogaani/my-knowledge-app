@@ -1,11 +1,17 @@
 import { useEffect, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { api, type NoteDetail, type TypeDef } from "../api";
-import Md from "../components/Md";
-import { Err } from "../components/ui";
+import { PencilIcon } from "lucide-react";
+import { api, type NoteDetail, type TypeDef } from "@/api";
+import Md from "@/components/Md";
+import { Chip, Choice, Err, Loading, Toolbar } from "@/components/common";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { useAction } from "@/lib/useAction";
 import { typeLabel } from "../App";
 
 const READONLY = new Set(["type", "created", "updated", "sources", "related"]);
+const FM_GRID = "my-3 mb-5 grid max-w-[760px] grid-cols-[110px_1fr] items-start gap-x-3 gap-y-1.5 text-sm md:grid-cols-[140px_1fr]";
 
 export default function Note() {
   const path = decodeURIComponent(useLocation().pathname.replace(/^\/note\//, ""));
@@ -14,57 +20,70 @@ export default function Note() {
   const [edit, setEdit] = useState<Record<string, string> | null>(null);
   const [line, setLine] = useState("");
   const [err, setErr] = useState<unknown>(null);
-  const [saved, setSaved] = useState("");
   const load = () => api.note(path).then(async (d) => { setN(d); setDef((await api.types()).find((t) => t.type === d.type) ?? null); }).catch(setErr);
-  useEffect(() => { setN(null); setEdit(null); load(); }, [path]);
-  if (err) return <Err e={err} />;
-  if (!n) return <p className="muted">読み込み中…</p>;
-  const fields = (def?.fields ?? Object.keys(n.fm)).filter((k) => !READONLY.has(k) && k !== "title" && k !== "summary" && k !== "tags" && k !== "status");
-  const startEdit = () => setEdit(Object.fromEntries(["status", "summary", "tags", ...fields].map((k) => [k, toStr(n.fm[k])])));
-  const save = async () => {
-    if (!edit) return;
+  useEffect(() => { setN(null); setEdit(null); setErr(null); load(); }, [path]);
+  const save = useAction(async () => {
+    if (!edit || !n) return;
     const patch: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(edit)) {
       const orig = toStr(n.fm[k]);
       if (v === orig) continue;
       patch[k] = k === "tags" ? v.split(/[,\s]+/).filter(Boolean) : v === "" ? "" : /^-?\d+(\.\d+)?$/.test(v) ? Number(v) : v;
     }
-    try { await api.patch(path, { fm: patch }); setEdit(null); setSaved("保存しました"); load(); } catch (e) { setErr(e); }
-  };
-  const append = async () => {
-    if (!line.trim()) return;
-    try { await api.patch(path, { append: { section: n.type === "project" ? "現状" : "履歴", line } }); setLine(""); load(); } catch (e) { setErr(e); }
-  };
+    await api.patch(path, { fm: patch }); setEdit(null); await load();
+  }, { success: "保存しました" });
+  const append = useAction(async () => {
+    if (!n || !line.trim()) return;
+    await api.patch(path, { append: { section: n.type === "project" ? "現状" : "履歴", line } }); setLine(""); await load();
+  }, { success: "追記しました" });
+  if (err && !n) return <Err e={err} />;
+  if (!n) return <Loading rows={6} />;
+  const fields = (def?.fields ?? Object.keys(n.fm)).filter((k) => !READONLY.has(k) && k !== "title" && k !== "summary" && k !== "tags" && k !== "status");
+  const startEdit = () => setEdit(Object.fromEntries(["status", "summary", "tags", ...fields].map((k) => [k, toStr(n.fm[k])])));
+  const appendLabel = n.type === "project" ? "現状に追記（日付付き）" : "履歴に追記（日付付き）";
   return (
     <>
-      <p className="small muted"><Link to={`/notes/${n.type}`}>{typeLabel(n.type)}</Link> / {path}{n.archived && <span className="chip">archive</span>}</p>
-      <h2>{n.title}</h2>
+      <p className="flex flex-wrap items-center gap-1 text-sm text-muted-foreground"><Link to={`/notes/${n.type}`}>{typeLabel(n.type)}</Link> / {path}{n.archived && <Chip>archive</Chip>}</p>
+      <h2 className="mt-1 mb-2 text-2xl font-semibold tracking-tight">{n.title}</h2>
+      <Err e={err} />
       {edit ? (
-        <div className="fm">
-          <label>status</label><select value={edit.status} onChange={(e) => setEdit({ ...edit, status: e.target.value })}>{(def?.statuses ?? [edit.status]).map((s) => <option key={s}>{s}</option>)}</select>
-          <label>summary</label><input type="text" value={edit.summary} onChange={(e) => setEdit({ ...edit, summary: e.target.value })} />
-          <label>tags</label><input type="text" value={edit.tags} onChange={(e) => setEdit({ ...edit, tags: e.target.value })} placeholder="カンマ区切り" />
-          {fields.map((k) => <FieldInput key={k} k={k} v={edit[k] ?? ""} onChange={(v) => setEdit({ ...edit, [k]: v })} />)}
-          <span /><span><button onClick={save}>保存</button> <button className="ghost" onClick={() => setEdit(null)}>キャンセル</button></span>
-        </div>
+        <form className={FM_GRID} onSubmit={(e) => { e.preventDefault(); save.run(); }}>
+          <fieldset disabled={save.pending} className="contents">
+            <Label className="pt-2 text-muted-foreground">status</Label>
+            <Choice className="w-fit" value={edit.status} onChange={(v) => setEdit({ ...edit, status: v })} options={def?.statuses ?? [edit.status]} disabled={save.pending} />
+            <Label htmlFor="f-summary" className="pt-2 text-muted-foreground">summary</Label>
+            <Input id="f-summary" value={edit.summary} onChange={(e) => setEdit({ ...edit, summary: e.target.value })} />
+            <Label htmlFor="f-tags" className="pt-2 text-muted-foreground">tags</Label>
+            <Input id="f-tags" value={edit.tags} onChange={(e) => setEdit({ ...edit, tags: e.target.value })} placeholder="カンマ区切り" />
+            {fields.map((k) => <FieldInput key={k} k={k} v={edit[k] ?? ""} disabled={save.pending} onChange={(v) => setEdit({ ...edit, [k]: v })} />)}
+            <span />
+            <span className="flex gap-2 pt-1">
+              <Button type="submit" loading={save.pending}>保存</Button>
+              <Button type="button" variant="outline" onClick={() => setEdit(null)}>キャンセル</Button>
+            </span>
+          </fieldset>
+        </form>
       ) : (
-        <div className="fm">
-          <label>status</label><span>{String(n.fm.status ?? "")}</span>
-          <label>summary</label><span>{String(n.fm.summary ?? "")}</span>
-          <label>tags</label><span>{(n.fm.tags as string[] | undefined)?.map((t) => <span key={t} className="chip">{t}</span>)}</span>
+        <div className={FM_GRID}>
+          <Label className="text-muted-foreground">status</Label><span>{String(n.fm.status ?? "")}</span>
+          <Label className="text-muted-foreground">summary</Label><span>{String(n.fm.summary ?? "")}</span>
+          <Label className="text-muted-foreground">tags</Label><span className="flex flex-wrap gap-1">{(n.fm.tags as string[] | undefined)?.map((t) => <Chip key={t}>{t}</Chip>)}</span>
           {fields.filter((k) => n.fm[k] !== undefined && n.fm[k] !== "").map((k) => <FieldRow key={k} k={k} v={n.fm[k]} />)}
-          <label>sources</label><span className="small muted">{(n.fm.sources as string[] | undefined)?.join(", ") || "—"}</span>
-          <label>updated</label><span className="small muted">{String(n.fm.updated ?? "")} <button className="ghost small" onClick={startEdit} style={{ marginLeft: 12 }}>編集</button> <span className="ok small">{saved}</span></span>
+          <Label className="text-muted-foreground">sources</Label><span className="text-muted-foreground">{(n.fm.sources as string[] | undefined)?.join(", ") || "—"}</span>
+          <Label className="text-muted-foreground">updated</Label>
+          <span className="flex items-center gap-3 text-muted-foreground">{String(n.fm.updated ?? "")} <Button variant="outline" size="sm" onClick={startEdit}><PencilIcon data-icon="inline-start" />編集</Button></span>
         </div>
       )}
       <Md text={n.body} basePath={n.path} />
-      {Object.entries(n.attachments).map(([name, text]) => <details key={name} open={name === "tasks.md"}><summary>{name}</summary><Md text={text} basePath={n.path} /></details>)}
-      <div className="toolbar" style={{ marginTop: 20 }}>
-        <input type="text" style={{ flex: 1, minWidth: 200 }} placeholder={n.type === "project" ? "現状に追記（日付付き）" : "履歴に追記（日付付き）"} value={line} onChange={(e) => setLine(e.target.value)} onKeyDown={(e) => e.key === "Enter" && append()} />
-        <button className="ghost" onClick={append}>追記</button>
-      </div>
+      {Object.entries(n.attachments).map(([name, text]) => <details key={name} open={name === "tasks.md"} className="my-3"><summary className="cursor-pointer font-medium">{name}</summary><Md text={text} basePath={n.path} /></details>)}
+      <form className="mt-5" onSubmit={(e) => { e.preventDefault(); append.run(); }}>
+        <Toolbar>
+          <Input className="min-w-52 flex-1" placeholder={appendLabel} aria-label={appendLabel} value={line} onChange={(e) => setLine(e.target.value)} disabled={append.pending} />
+          <Button type="submit" variant="outline" loading={append.pending} disabled={!line.trim()}>追記</Button>
+        </Toolbar>
+      </form>
       {(n.backlinks.length > 0 || n.links.length > 0) && (
-        <p className="small muted">
+        <p className="text-sm text-muted-foreground">
           {n.links.length > 0 && <>リンク先: {n.links.map((l) => <Link key={l} to={`/note/${l}`}>{l.split("/").pop()}</Link>).reduce<React.ReactNode[]>((a, x, i) => (i ? [...a, " · ", x] : [x]), [])}<br /></>}
           {n.backlinks.length > 0 && <>被リンク: {n.backlinks.map((l) => <Link key={l} to={`/note/${l}`}>{l.split("/").pop()}</Link>).reduce<React.ReactNode[]>((a, x, i) => (i ? [...a, " · ", x] : [x]), [])}</>}
         </p>
@@ -74,9 +93,15 @@ export default function Note() {
 }
 const toStr = (v: unknown) => Array.isArray(v) ? v.join(", ") : v === undefined || v === null ? "" : String(v);
 function FieldRow({ k, v }: { k: string; v: unknown }) {
-  return <><label>{k}</label><span>{k === "rating" ? "★".repeat(Number(v)) : Array.isArray(v) ? v.join(", ") : String(v)}</span></>;
+  return <><Label className="text-muted-foreground">{k}</Label><span>{k === "rating" ? "★".repeat(Number(v)) : Array.isArray(v) ? v.join(", ") : String(v)}</span></>;
 }
-function FieldInput({ k, v, onChange }: { k: string; v: string; onChange: (v: string) => void }) {
+function FieldInput({ k, v, onChange, disabled }: { k: string; v: string; onChange: (v: string) => void; disabled?: boolean }) {
   const isDate = /_at$|^due$|^start$|^next_renewal$|^review_due$|^last_reviewed$/.test(k);
-  return <><label>{k}</label>{k === "rating" ? <select value={v} onChange={(e) => onChange(e.target.value)}><option value="">—</option>{[1, 2, 3, 4, 5].map((r) => <option key={r} value={r}>{"★".repeat(r)}</option>)}</select> : <input type={isDate ? "date" : "text"} value={v} onChange={(e) => onChange(e.target.value)} />}</>;
+  const id = `f-${k}`;
+  return <>
+    <Label htmlFor={id} className="pt-2 text-muted-foreground">{k}</Label>
+    {k === "rating"
+      ? <Choice id={id} className="w-fit" value={v} onChange={onChange} disabled={disabled} options={[{ value: "", label: "—" }, ...[1, 2, 3, 4, 5].map((r) => ({ value: String(r), label: "★".repeat(r) }))]} />
+      : <Input id={id} className={isDate ? "w-fit" : undefined} type={isDate ? "date" : "text"} value={v} onChange={(e) => onChange(e.target.value)} />}
+  </>;
 }

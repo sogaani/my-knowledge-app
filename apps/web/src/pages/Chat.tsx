@@ -1,7 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, type ChatMessage, type Job } from "../api";
-import { Err } from "../components/ui";
+import { SendIcon } from "lucide-react";
+import { api, type ChatMessage, type Job } from "@/api";
+import { Err, PageTitle } from "@/components/common";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Spinner } from "@/components/ui/spinner";
+import { useAction } from "@/lib/useAction";
+import { cn } from "@/lib/utils";
 
 export default function Chat() {
   const [msgs, setMsgs] = useState<ChatMessage[]>([]);
@@ -20,29 +26,35 @@ export default function Chat() {
     return () => clearInterval(t);
   }, [pending]);
   useEffect(() => { end.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs, pending]);
-  const send = async () => {
-    if (!q.trim()) return;
-    try { const r = await api.ask(q.trim()); setQ(""); setPending(r.job); load(); } catch (e) { setErr(e); }
-  };
+  const send = useAction(async (question: string) => {
+    const r = await api.ask(question);
+    setQ(""); setPending(r.job); load();
+  });
+  // Locked from submit until the worker's answer lands: one question in flight at a time.
+  const locked = send.pending || !!pending;
   return (
-    <div className="chat">
-      <h2>チャット</h2>
-      <p className="muted small">質問は Mac のワーカーが <code>ask</code> スキルで処理します。Mac が起きていないときは待機になります。</p>
+    <div className="max-w-[760px]">
+      <PageTitle>チャット</PageTitle>
+      <p className="text-sm text-muted-foreground">質問は Mac のワーカーが <code>ask</code> スキルで処理します。Mac が起きていないときは待機になります。</p>
       {msgs.map((m) => (
-        <div key={m.id} className={`msg ${m.role}`}>
+        <div key={m.id} className={cn("my-2 rounded-xl px-3.5 py-2.5 whitespace-pre-wrap", m.role === "user" ? "ml-10 bg-muted md:ml-16" : "mr-10 border bg-card md:mr-16")}>
           {m.text}
           {m.role === "assistant" && JSON.parse(m.sources || "[]").length > 0 && (
-            <div className="small muted" style={{ marginTop: 6 }}>根拠: {(JSON.parse(m.sources) as string[]).map((s) => <Link key={s} to={`/note/${s}`} style={{ marginRight: 8 }}>{s.split("/").pop()}</Link>)}</div>
+            <div className="mt-1.5 text-sm text-muted-foreground">根拠: {(JSON.parse(m.sources) as string[]).map((s) => <Link key={s} to={`/note/${s}`} className="mr-2">{s.split("/").pop()}</Link>)}</div>
           )}
         </div>
       ))}
-      {pending && <div className="msg assistant muted">考え中…（ジョブ {pending.id.slice(0, 8)}）</div>}
+      {pending && (
+        <div className="my-2 mr-10 flex items-center gap-2 rounded-xl border bg-card px-3.5 py-2.5 text-muted-foreground md:mr-16">
+          <Spinner />考え中…（ジョブ {pending.id.slice(0, 8)}）
+        </div>
+      )}
       <div ref={end} />
       <Err e={err} />
-      <div className="toolbar" style={{ marginTop: 16 }}>
-        <input type="text" style={{ flex: 1 }} value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()} placeholder="評価 4 以上のホラー小説は？ / Netflix はいくら？" />
-        <button onClick={send} disabled={!!pending}>送信</button>
-      </div>
+      <form className="mt-4 flex gap-2" onSubmit={(e) => { e.preventDefault(); if (q.trim()) send.run(q.trim()); }}>
+        <Input className="flex-1" value={q} onChange={(e) => setQ(e.target.value)} disabled={locked} placeholder="評価 4 以上のホラー小説は？ / Netflix はいくら？" />
+        <Button type="submit" loading={locked} disabled={!q.trim()}>{!locked && <SendIcon data-icon="inline-start" />}送信</Button>
+      </form>
     </div>
   );
 }

@@ -1,6 +1,10 @@
 import { useEffect, useState } from "react";
-import { api } from "../api";
-import { Err } from "../components/ui";
+import { CheckIcon, SparklesIcon, XIcon } from "lucide-react";
+import { api } from "@/api";
+import { Chip, Err, Loading, PageTitle, Section, Toolbar } from "@/components/common";
+import { Button } from "@/components/ui/button";
+import { useAction } from "@/lib/useAction";
+import { cn } from "@/lib/utils";
 
 interface Item { id: string; section: string; line: string; title: string; reacted?: string; url?: string }
 
@@ -22,30 +26,49 @@ function parse(md: string): { updated: string; items: Item[] } {
 
 export default function Suggestions() {
   const [data, setData] = useState<{ updated: string; items: Item[] } | null>(null);
-  const [err, setErr] = useState<unknown>(null); const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<unknown>(null);
   const load = () => api.gold("37_suggestions").then((g) => setData(parse(g.markdown))).catch(setErr);
   useEffect(() => { load(); }, []);
-  const react = async (it: Item, reaction: "read" | "dismissed") => {
-    const type = it.section.includes("本") ? "book" : it.section.includes("映画") ? "media" : undefined;
-    try { await api.react({ id: it.id, reaction, title: it.title, type: type as "book" | "media" | undefined }); load(); } catch (e) { setErr(e); }
-  };
-  const refresh = async () => { setBusy(true); try { await api.runJob("recommend"); } catch (e) { setErr(e); } finally { setBusy(false); } };
+  const refresh = useAction(() => api.runJob("recommend"), { success: (j) => `recommend を投入しました（${j.id.slice(0, 8)}）。終わったら再読み込みしてください` });
   if (err) return <Err e={err} />;
-  if (!data) return <p className="muted">読み込み中…</p>;
+  if (!data) return <><PageTitle>おすすめ</PageTitle><Loading /></>;
   const sections = [...new Set(data.items.map((i) => i.section))];
   return (
     <>
-      <h2>おすすめ <span className="muted small">{data.updated && `${data.updated} 更新`}</span></h2>
-      <div className="toolbar"><button className="ghost" disabled={busy} onClick={refresh}>recommend を実行（Mac ワーカー）</button></div>
-      {data.items.length === 0 && <p className="muted">まだ提案がありません。上のボタンで生成できます。</p>}
+      <PageTitle sub={data.updated && `${data.updated} 更新`}>おすすめ</PageTitle>
+      <Toolbar>
+        <Button variant="outline" loading={refresh.pending} onClick={() => refresh.run()}>{!refresh.pending && <SparklesIcon data-icon="inline-start" />}recommend を実行（Mac ワーカー）</Button>
+      </Toolbar>
+      {data.items.length === 0 && <p className="text-muted-foreground">まだ提案がありません。上のボタンで生成できます。</p>}
       {sections.map((s) => (
-        <section key={s}><h3>{s}</h3>
-          <ul>{data.items.filter((i) => i.section === s).map((it) => (
-            <li key={it.id} style={{ opacity: it.reacted ? 0.5 : 1 }}>
-              {it.url ? <a href={it.url} target="_blank" rel="noreferrer">{it.title}</a> : <b>{it.title}</b>} <span className="small muted">{it.line.replace(it.title, "").replace(/^\s*[—-]\s*/, "")}</span>
-              {it.reacted ? <span className="chip">{it.reacted}</span> : <span style={{ marginLeft: 8 }}><button className="ghost small" onClick={() => react(it, "read")}>{s.includes("記事") ? "読んだ" : "読む/観る"}</button> <button className="ghost small" onClick={() => react(it, "dismissed")}>興味なし</button></span>}
-            </li>))}</ul>
+        <section key={s}><Section>{s}</Section>
+          <ul className="space-y-2">{data.items.filter((i) => i.section === s).map((it) => <SuggestionItem key={it.id} it={it} article={s.includes("記事")} onDone={load} />)}</ul>
         </section>))}
     </>
+  );
+}
+
+/** One row: its own pending state, so the clicked button spins and both buttons lock until the reaction is saved. */
+function SuggestionItem({ it, article, onDone }: { it: Item; article: boolean; onDone: () => Promise<unknown> }) {
+  const [which, setWhich] = useState<"read" | "dismissed" | null>(null);
+  const react = useAction(async (reaction: "read" | "dismissed") => {
+    setWhich(reaction);
+    const type = it.section.includes("本") ? "book" : it.section.includes("映画") ? "media" : undefined;
+    const r = await api.react({ id: it.id, reaction, title: it.title, type });
+    await onDone();
+    return r;
+  }, { success: (r) => (r.created ? `ノートを作成しました: ${r.created}` : "記録しました") });
+  return (
+    <li className={cn("flex flex-wrap items-center gap-x-2 gap-y-1", it.reacted && "opacity-50")}>
+      <span className="min-w-0 flex-1">
+        {it.url ? <a href={it.url} target="_blank" rel="noreferrer">{it.title}</a> : <b>{it.title}</b>} <span className="text-sm text-muted-foreground">{it.line.replace(it.title, "").replace(/^\s*[—-]\s*/, "")}</span>
+      </span>
+      {it.reacted ? <Chip>{it.reacted}</Chip> : (
+        <span className="flex gap-1.5">
+          <Button size="sm" variant="outline" disabled={react.pending} loading={react.pending && which === "read"} onClick={() => react.run("read")}>{!(react.pending && which === "read") && <CheckIcon data-icon="inline-start" />}{article ? "読んだ" : "読む/観る"}</Button>
+          <Button size="sm" variant="ghost" disabled={react.pending} loading={react.pending && which === "dismissed"} onClick={() => react.run("dismissed")}>{!(react.pending && which === "dismissed") && <XIcon data-icon="inline-start" />}興味なし</Button>
+        </span>
+      )}
+    </li>
   );
 }

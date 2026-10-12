@@ -1,52 +1,168 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/geist";
+
+/* Dark mode follows the OS, as before (no toggle). */
+@custom-variant dark (@media (prefers-color-scheme: dark));
+
+@theme inline {
+    --font-heading: var(--font-sans);
+    --font-sans: 'Geist Variable', -apple-system, "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif;
+    --color-sidebar-ring: var(--sidebar-ring);
+    --color-sidebar-border: var(--sidebar-border);
+    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+    --color-sidebar-accent: var(--sidebar-accent);
+    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+    --color-sidebar-primary: var(--sidebar-primary);
+    --color-sidebar-foreground: var(--sidebar-foreground);
+    --color-sidebar: var(--sidebar);
+    --color-chart-5: var(--chart-5);
+    --color-chart-4: var(--chart-4);
+    --color-chart-3: var(--chart-3);
+    --color-chart-2: var(--chart-2);
+    --color-chart-1: var(--chart-1);
+    --color-ring: var(--ring);
+    --color-input: var(--input);
+    --color-border: var(--border);
+    --color-destructive: var(--destructive);
+    --color-ok: var(--ok);
+    --color-warn: var(--warn);
+    --color-accent-foreground: var(--accent-foreground);
+    --color-accent: var(--accent);
+    --color-muted-foreground: var(--muted-foreground);
+    --color-muted: var(--muted);
+    --color-secondary-foreground: var(--secondary-foreground);
+    --color-secondary: var(--secondary);
+    --color-primary-foreground: var(--primary-foreground);
+    --color-primary: var(--primary);
+    --color-popover-foreground: var(--popover-foreground);
+    --color-popover: var(--popover);
+    --color-card-foreground: var(--card-foreground);
+    --color-card: var(--card);
+    --color-foreground: var(--foreground);
+    --color-background: var(--background);
+    --radius-sm: calc(var(--radius) * 0.6);
+    --radius-md: calc(var(--radius) * 0.8);
+    --radius-lg: var(--radius);
+    --radius-xl: calc(var(--radius) * 1.4);
+    --radius-2xl: calc(var(--radius) * 1.8);
+    --radius-3xl: calc(var(--radius) * 2.2);
+    --radius-4xl: calc(var(--radius) * 2.6);
+}
+
 :root {
-  --bg: #fafaf7; --fg: #1d1d1b; --muted: #6b6b66; --line: #e3e2dc; --card: #ffffff; --accent: #2a6f97; --accent-fg: #fff;
-  --ok: #2e7d32; --warn: #b26a00; --err: #c62828; --chip: #efede6;
-  color-scheme: light;
+    --background: oklch(1 0 0);
+    --foreground: oklch(0.145 0 0);
+    --card: oklch(1 0 0);
+    --card-foreground: oklch(0.145 0 0);
+    --popover: oklch(1 0 0);
+    --popover-foreground: oklch(0.145 0 0);
+    --primary: oklch(0.205 0 0);
+    --primary-foreground: oklch(0.985 0 0);
+    --secondary: oklch(0.97 0 0);
+    --secondary-foreground: oklch(0.205 0 0);
+    --muted: oklch(0.97 0 0);
+    --muted-foreground: oklch(0.556 0 0);
+    --accent: oklch(0.97 0 0);
+    --accent-foreground: oklch(0.205 0 0);
+    --destructive: oklch(0.577 0.245 27.325);
+    --border: oklch(0.922 0 0);
+    --input: oklch(0.922 0 0);
+    --ring: oklch(0.708 0 0);
+    --chart-1: oklch(0.87 0 0);
+    --chart-2: oklch(0.556 0 0);
+    --chart-3: oklch(0.439 0 0);
+    --chart-4: oklch(0.371 0 0);
+    --chart-5: oklch(0.269 0 0);
+    --radius: 0.625rem;
+    --ok: oklch(0.52 0.14 145);
+    --warn: oklch(0.6 0.15 65);
+    --sidebar: oklch(0.985 0 0);
+    --sidebar-foreground: oklch(0.145 0 0);
+    --sidebar-primary: oklch(0.205 0 0);
+    --sidebar-primary-foreground: oklch(0.985 0 0);
+    --sidebar-accent: oklch(0.97 0 0);
+    --sidebar-accent-foreground: oklch(0.205 0 0);
+    --sidebar-border: oklch(0.922 0 0);
+    --sidebar-ring: oklch(0.708 0 0);
 }
+
 @media (prefers-color-scheme: dark) {
-  :root { --bg: #151614; --fg: #e8e6df; --muted: #9a9a92; --line: #2c2d2a; --card: #1d1e1b; --accent: #7fb3d5; --accent-fg: #0b1720; --chip: #262723; color-scheme: dark; }
+  :root {
+    --background: oklch(0.145 0 0);
+    --foreground: oklch(0.985 0 0);
+    --card: oklch(0.205 0 0);
+    --card-foreground: oklch(0.985 0 0);
+    --popover: oklch(0.205 0 0);
+    --popover-foreground: oklch(0.985 0 0);
+    --primary: oklch(0.922 0 0);
+    --primary-foreground: oklch(0.205 0 0);
+    --secondary: oklch(0.269 0 0);
+    --secondary-foreground: oklch(0.985 0 0);
+    --muted: oklch(0.269 0 0);
+    --muted-foreground: oklch(0.708 0 0);
+    --accent: oklch(0.269 0 0);
+    --accent-foreground: oklch(0.985 0 0);
+    --destructive: oklch(0.704 0.191 22.216);
+    --ok: oklch(0.72 0.15 145);
+    --warn: oklch(0.78 0.14 75);
+    --border: oklch(1 0 0 / 10%);
+    --input: oklch(1 0 0 / 15%);
+    --ring: oklch(0.556 0 0);
+    --chart-1: oklch(0.87 0 0);
+    --chart-2: oklch(0.556 0 0);
+    --chart-3: oklch(0.439 0 0);
+    --chart-4: oklch(0.371 0 0);
+    --chart-5: oklch(0.269 0 0);
+    --sidebar: oklch(0.205 0 0);
+    --sidebar-foreground: oklch(0.985 0 0);
+    --sidebar-primary: oklch(0.488 0.243 264.376);
+    --sidebar-primary-foreground: oklch(0.985 0 0);
+    --sidebar-accent: oklch(0.269 0 0);
+    --sidebar-accent-foreground: oklch(0.985 0 0);
+    --sidebar-border: oklch(1 0 0 / 10%);
+    --sidebar-ring: oklch(0.556 0 0);
+  }
 }
-* { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.6 -apple-system, "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif; }
-a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
-.layout { display: grid; grid-template-columns: 220px 1fr; min-height: 100vh; }
-nav.side { border-right: 1px solid var(--line); padding: 20px 14px; position: sticky; top: 0; height: 100vh; overflow: auto; }
-nav.side h1 { font-size: 15px; margin: 0 0 16px; letter-spacing: .02em; }
-nav.side a { display: block; padding: 6px 10px; border-radius: 6px; color: var(--fg); }
-nav.side a.active, nav.side a:hover { background: var(--chip); text-decoration: none; }
-nav.side .group { margin-top: 14px; font-size: 11px; text-transform: uppercase; color: var(--muted); padding: 0 10px; }
-main { padding: 24px 32px; max-width: 1100px; }
-@media (max-width: 760px) {
-  .layout { grid-template-columns: 1fr; }
-  nav.side { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--line); display: flex; flex-wrap: wrap; gap: 4px; padding: 10px 12px; }
-  nav.side h1 { width: 100%; margin: 0 0 6px; } nav.side .group { display: none; }
-  main { padding: 16px; }
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+    }
+  body {
+    @apply bg-background text-foreground;
+    }
+  button:not(:disabled), [role="button"]:not(:disabled) {
+    cursor: pointer;
+    }
+  html {
+    @apply font-sans;
+    color-scheme: light dark;
+    }
+  a { @apply text-primary underline-offset-4 hover:underline; }
+  code { @apply rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]; }
 }
-h2 { font-size: 22px; margin: 0 0 16px; } h3 { font-size: 16px; margin: 20px 0 8px; }
-.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
-.card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
-.card .big { font-size: 26px; font-weight: 600; } .card .sub { color: var(--muted); font-size: 13px; }
-table { width: 100%; border-collapse: collapse; font-size: 14px; } th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
-th { color: var(--muted); font-weight: 500; font-size: 12px; }
-.tablewrap { overflow-x: auto; }
-.chip { display: inline-block; background: var(--chip); border-radius: 999px; padding: 1px 9px; font-size: 12px; margin-right: 4px; }
-.status-active, .status-read, .status-watched, .status-done { color: var(--ok); } .status-want, .status-idea, .status-queued { color: var(--muted); }
-.status-reading, .status-watching, .status-running { color: var(--warn); } .status-failed, .status-cancelled, .status-dnf { color: var(--err); }
-.toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 14px; }
-input, select, textarea, button { font: inherit; color: inherit; }
-input[type=text], input[type=search], input[type=url], input[type=date], input[type=number], select, textarea { background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; }
-textarea { width: 100%; min-height: 110px; }
-button { background: var(--accent); color: var(--accent-fg); border: 0; border-radius: 6px; padding: 7px 14px; cursor: pointer; }
-button.ghost { background: var(--chip); color: var(--fg); } button:disabled { opacity: .5; cursor: default; }
-.muted { color: var(--muted); } .small { font-size: 13px; }
-.md { max-width: 760px; } .md img { max-width: 100%; } .md pre { overflow-x: auto; background: var(--chip); padding: 10px; border-radius: 6px; }
-.md blockquote { border-left: 3px solid var(--line); margin: 0; padding: 4px 14px; color: var(--muted); }
-details.spoiler { border: 1px dashed var(--line); border-radius: 8px; padding: 6px 12px; margin: 10px 0; } details.spoiler summary { cursor: pointer; color: var(--warn); }
-.fm { display: grid; grid-template-columns: 140px 1fr; gap: 6px 12px; font-size: 14px; margin: 12px 0 20px; max-width: 760px; }
-.fm label { color: var(--muted); padding-top: 6px; }
-.two { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; } @media (max-width: 900px) { .two { grid-template-columns: 1fr; } }
-.chat { max-width: 760px; } .msg { padding: 10px 14px; border-radius: 10px; margin: 8px 0; white-space: pre-wrap; }
-.msg.user { background: var(--chip); margin-left: 60px; } .msg.assistant { background: var(--card); border: 1px solid var(--line); margin-right: 60px; }
-.log { background: var(--chip); padding: 10px; border-radius: 6px; font: 12px/1.5 ui-monospace, Menlo, monospace; white-space: pre-wrap; max-height: 320px; overflow: auto; }
-.err { color: var(--err); } .ok { color: var(--ok); }
-.stars { color: var(--warn); letter-spacing: 1px; }
+
+/* Note markdown (react-markdown output; see components/Md.tsx). */
+@layer components {
+  .md { @apply max-w-[760px] leading-relaxed; }
+  .md :where(h1) { @apply mt-6 mb-3 text-xl font-semibold; }
+  .md :where(h2) { @apply mt-6 mb-3 text-lg font-semibold; }
+  .md :where(h3, h4) { @apply mt-5 mb-2 font-semibold; }
+  .md :where(p, ul, ol, table, pre, blockquote) { @apply my-3; }
+  .md :where(ul) { @apply list-disc pl-6; }
+  .md :where(ol) { @apply list-decimal pl-6; }
+  .md :where(li) { @apply my-0.5; }
+  .md :where(a) { @apply underline; }
+  .md :where(img) { @apply max-w-full; }
+  .md :where(pre) { @apply overflow-x-auto rounded-md bg-muted p-3 text-sm; }
+  .md :where(pre code) { @apply bg-transparent p-0; }
+  .md :where(blockquote) { @apply border-l-3 border-border px-4 py-1 text-muted-foreground; }
+  .md :where(table) { @apply block w-full overflow-x-auto text-sm; }
+  .md :where(th, td) { @apply border-b px-2.5 py-1.5 text-left align-top; }
+  .md :where(th) { @apply font-medium text-muted-foreground; }
+  .md :where(hr) { @apply my-6; }
+  details.spoiler { @apply my-3 rounded-lg border border-dashed px-3 py-1.5; }
+  details.spoiler > summary { @apply cursor-pointer text-warn; }
+}

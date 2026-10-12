@@ -7,7 +7,7 @@
   └─ Mac の my-knowledge/000_inbox/ に置く（数十 MB になるので WebUI の投げ込みは使わない）
        └─ ingest スキル: kb ingest → Bronze（kind file、生 JSON のまま）
             └─ kb location import <bronze-id>         packages/core/src/location/
-                 ├─ parse.ts   Android(semanticSegments) / iOS(配列, placeID) / 旧 Takeout(timelineObjects.placeVisit)
+                 ├─ parse.ts   Android(semanticSegments) / iOS(配列, placeID)（旧 Takeout の Semantic Location History は対象外）
                  ├─ places.ts  Places API (New) Place Details: displayName, primaryType だけ（field mask）
                  │             900_system/cache/places.sqlite に最長 30 日キャッシュ、期限切れは毎回削除
                  │             HTTP は collect/http.ts（429・5xx は指数バックオフ + Retry-After）

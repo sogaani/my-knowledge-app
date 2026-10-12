@@ -26,13 +26,6 @@ const ios = [
   { startTime: "2026-10-03T11:00:00.000+09:00", endTime: "2026-10-03T12:00:00.000+09:00", visit: { probability: "0.9", topCandidate: { placeID: "P_cafe", semanticType: "Unknown", placeLocation: "geo:35.660000,139.700000" } } },
   { startTime: "2026-10-03T12:00:00.000+09:00", endTime: "2026-10-03T12:30:00.000+09:00", activity: { topCandidate: { type: "walking" } } },
 ];
-const takeout = {
-  timelineObjects: [
-    { activitySegment: { duration: { startTimestamp: "2024-03-01T00:00:00Z" } } },
-    { placeVisit: { location: { placeId: "P_old", latitudeE7: 356812000, longitudeE7: 1397671000, semanticType: "TYPE_CAFE" }, duration: { startTimestampMs: String(Date.parse("2024-03-02T03:00:00Z")), endTimestampMs: String(Date.parse("2024-03-02T04:00:00Z")) } } },
-  ],
-};
-
 describe("parseTimeline", () => {
   test("android on-device export: visits only, placeId required, degree strings", () => {
     expect(parseTimeline(android)).toEqual([
@@ -40,13 +33,14 @@ describe("parseTimeline", () => {
       { start: "2026-10-01T13:00:00.000+09:00", end: "2026-10-01T15:00:00.000+09:00", placeId: "P_museum", lat: 35.71, lng: 139.77, semanticType: "UNKNOWN", source: "android" },
     ]);
   });
-  test("iOS export (placeID, geo: URI) and old Takeout (placeVisit, E7, *TimestampMs)", () => {
+  test("iOS export (placeID, geo: URI)", () => {
     expect(parseTimeline(ios)).toEqual([{ start: "2026-10-03T11:00:00.000+09:00", end: "2026-10-03T12:00:00.000+09:00", placeId: "P_cafe", lat: 35.66, lng: 139.7, semanticType: "Unknown", source: "ios" }]);
-    expect(parseTimeline(takeout)).toEqual([{ start: "2024-03-02T03:00:00.000Z", end: "2024-03-02T04:00:00.000Z", placeId: "P_old", lat: 35.6812, lng: 139.7671, semanticType: "TYPE_CAFE", source: "takeout" }]);
   });
   test("anything else is rejected", () => {
     expect(() => parseTimeline({ hello: 1 })).toThrow(NotATimelineError);
     expect(() => parseTimeline([1, 2])).toThrow(NotATimelineError);
+    // the old Takeout Semantic Location History is not supported
+    expect(() => parseTimeline({ timelineObjects: [{ placeVisit: { location: { placeId: "P" }, duration: { startTimestamp: "2024-03-02T03:00:00Z", endTimestamp: "2024-03-02T04:00:00Z" } } }] })).toThrow(NotATimelineError);
     expect(parseLatLng("not a point")).toEqual([null, null]);
   });
 });

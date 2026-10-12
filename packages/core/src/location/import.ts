@@ -29,7 +29,7 @@ export const NOTABLE_TYPES = new Set([
 
 /**
  * Wall-clock date / time where the visit happened: the on-device exports carry the local offset ("…T10:00:00.000+09:00"),
- * so a trip abroad shows local times. Only offset-less / UTC stamps (old Takeout "…Z") fall back to this machine's zone.
+ * so a trip abroad shows local times. Stamps without an offset / in UTC ("…Z") fall back to this machine's zone.
  */
 const WALL = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})(?::\d{2}(?:\.\d+)?)?[+-]\d{2}:?\d{2}$/;
 export const localDate = (iso: string) => WALL.exec(iso)?.[1] ?? new Date(iso).toLocaleDateString("sv-SE");
@@ -107,7 +107,7 @@ export async function importLocation(cfg: KbConfig, reg: SchemaRegistry, db: Dat
   const meta = readMeta(cfg, bronzeId);
   if (!meta) throw new Error(`no Bronze item ${bronzeId}`);
   const file = timelineFile(cfg, meta);
-  if (!file) throw new Error(`${bronzeId} has no Google Maps Timeline export (Timeline.json / Semantic Location History)`);
+  if (!file) throw new Error(`${bronzeId} has no Google Maps Timeline export (the on-device Timeline.json)`);
   if (!reg.get("location_log")) throw new Error("schema location_log.json missing");
   const apiKey = o.apiKey ?? placesApiKey(cfg);
   if (!apiKey) throw new Error("Places API key missing: set [places] api_key in 900_system/config.local.toml (or GOOGLE_MAPS_API_KEY)");

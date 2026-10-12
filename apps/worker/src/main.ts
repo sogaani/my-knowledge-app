@@ -66,6 +66,10 @@ async function stageInbox(job: Job) {
   }
 }
 
+/** Kept open across search jobs (the search lane is the only user in this process). */
+let searchDb: ReturnType<typeof openDb> | undefined;
+let embedder: ReturnType<typeof makeEmbedder> | undefined;
+
 async function handle(job: Job) {
   const payload = JSON.parse(job.payload || "{}") as Record<string, unknown>;
   console.log(`[job ${job.id.slice(0, 8)}] ${job.kind}`);
@@ -76,14 +80,14 @@ async function handle(job: Job) {
       case "search": {
         // In-process (no agent CLI): LanceDB vector + Lindera BM25 on this Mac, Ollama for the query vector.
         const t0 = Date.now();
-        const db = openDb(cfg);
-        indexNotes(cfg, db);
+        searchDb ??= openDb(cfg);
+        embedder ??= makeEmbedder(cfg);
+        indexNotes(cfg, searchDb);
         const { filters } = parseFilters(String(payload.filters ?? "").split(/\s+/).filter(Boolean));
-        const res = await search(cfg, db, String(payload.query ?? ""), {
+        const res = await search(cfg, searchDb, String(payload.query ?? ""), {
           mode: (payload.mode as SearchMode | undefined) ?? "hybrid", filters,
           includeArchive: !!payload.includeArchive, limit: Number(payload.limit ?? 20),
-        }, { embedder: makeEmbedder(cfg) });
-        db.close();
+        }, { embedder });
         console.log(`[job ${job.id.slice(0, 8)}] search "${String(payload.query ?? "").slice(0, 40)}" -> ${res.hits.length} hits (${res.mode}${res.degraded ? ", degraded: " + res.degraded : ""}) ${Date.now() - t0}ms`);
         body = { ok: true, result: res };
         break;
@@ -134,13 +138,18 @@ function parseAnswer(out: string): { answer: string; sources: string[] } {
   return { answer: out.slice(0, i).trim(), sources };
 }
 
-console.log(`kb worker: api=${API} kb=${cfg.root} agent=${process.env.KB_AGENT ?? "claude"}`);
-for (;;) {
-  try {
-    const res = await api("/jobs/next?wait=25");
-    if (res) await handle((await res.json()) as Job);
-  } catch (e) {
-    console.error("worker:", (e as Error).message);
-    await Bun.sleep(5000);
+/** One long-poll lane. Searches get their own lane so a minutes-long ingest/ask/skill job never makes them time out. */
+async function lane(kinds: string) {
+  for (;;) {
+    try {
+      const res = await api(`/jobs/next?wait=25&kinds=${kinds}`);
+      if (res) await handle((await res.json()) as Job);
+    } catch (e) {
+      console.error(`worker[${kinds}]:`, (e as Error).message);
+      await Bun.sleep(5000);
+    }
   }
 }
+
+console.log(`kb worker: api=${API} kb=${cfg.root} agent=${process.env.KB_AGENT ?? "claude"}`);
+await Promise.all([lane("search"), lane("ingest,ask,recommend,skill")]);

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { PlusIcon, SearchIcon } from "lucide-react";
 import { api, type NoteSummary, type SearchResponse, type TypeDef } from "@/api";
@@ -43,13 +43,22 @@ export default function Notes() {
   // Semantic search goes through the Mac worker (LanceDB + Ollama); plain listing/keyword stays on the API's SQLite.
   const semantic = !!text && mode === "hybrid";
   const def = types.find((t) => t.type === type);
+  const seq = useRef(0);
   const load = () => {
+    const my = ++seq.current;
+    const current = () => my === seq.current; // a newer query was started: drop this answer
     setErr(null); setBusy(true);
     const common = { ...(type ? { type } : {}), ...(status ? { status } : {}), ...(archive ? { archive } : {}) };
-    const p = semantic
-      ? api.search({ ...common, q: text, mode, limit: "30" }).then(setRes)
-      : api.notes({ ...common, ...(text ? { text } : {}), limit: "500" }).then((r) => { setRes(null); setRows(r); });
-    p.catch(setErr).finally(() => setBusy(false));
+    let p: Promise<unknown>;
+    if (semantic) {
+      // The worker round trip takes ~1s: show the API's own keyword hits first, then replace them with the hybrid ones.
+      let final = false;
+      api.search({ ...common, q: text, mode: "keyword", limit: "30" }).then((r) => { if (current() && !final) setRes(r); }).catch(() => {});
+      p = api.search({ ...common, q: text, mode, limit: "30" }).then((r) => { final = true; if (current()) setRes(r); });
+    } else {
+      p = api.notes({ ...common, ...(text ? { text } : {}), limit: "500" }).then((r) => { if (current()) { setRes(null); setRows(r); } });
+    }
+    p.catch((e) => current() && setErr(e)).finally(() => current() && setBusy(false));
   };
   useEffect(() => { api.types().then(setTypes).catch(setErr); }, []);
   useEffect(() => { load(); }, [type, text, status, archive, mode]);

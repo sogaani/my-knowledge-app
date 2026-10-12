@@ -1,8 +1,8 @@
 import { Database } from "bun:sqlite";
-import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { existsSync, mkdirSync, statSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import type { KbConfig } from "./config";
-import { walkNotes, type Note } from "./notes";
+import { readNote, toRel, walkNotes, type Note } from "./notes";
 
 export interface NoteRow {
   path: string;
@@ -41,14 +41,19 @@ export function openDb(cfg: KbConfig): Database {
   mkdirSync(dirname(cfg.dbPath), { recursive: true });
   const db = new Database(cfg.dbPath);
   db.exec("PRAGMA journal_mode=WAL");
+  db.exec("PRAGMA busy_timeout=5000"); // the worker's search loop and `kb` subprocesses write the same file
   db.exec(SCHEMA);
   return db;
 }
 
 const LINK_RE = /\]\(([^)\s#]+\.md)(?:#[^)]*)?\)/g;
 
-/** Full or incremental re-index of Silver + Gold. Returns counts. */
-export function indexNotes(cfg: KbConfig, db: Database, opts: { full?: boolean } = {}) {
+/**
+ * Full or incremental re-index of Silver + Gold. Returns counts.
+ * `paths` (repo-relative files or folders, e.g. from `git diff --name-only`) limits the walk to those notes,
+ * so a single edit does not re-read every file.
+ */
+export function indexNotes(cfg: KbConfig, db: Database, opts: { full?: boolean; paths?: string[] } = {}) {
   const existing = new Map<string, number>(
     (db.query("SELECT path, mtime FROM notes").all() as { path: string; mtime: number }[]).map((r) => [r.path, r.mtime]),
   );
@@ -63,6 +68,7 @@ export function indexNotes(cfg: KbConfig, db: Database, opts: { full?: boolean }
   const delLinks = db.prepare("DELETE FROM links WHERE src=?");
   const insLink = db.prepare("INSERT OR IGNORE INTO links(src,dst) VALUES(?,?)");
 
+  const scope = opts.paths ? notesUnder(cfg, opts.paths) : { notes: [...walkNotes(cfg)], covers: () => true };
   const tx = db.transaction((notes: Note[]) => {
     for (const n of notes) {
       seen.add(n.path);
@@ -77,7 +83,7 @@ export function indexNotes(cfg: KbConfig, db: Database, opts: { full?: boolean }
       for (const dst of extractLinks(n)) insLink.run(n.path, dst);
     }
     for (const p of existing.keys()) {
-      if (!seen.has(p)) {
+      if (!seen.has(p) && scope.covers(p)) {
         db.run("DELETE FROM notes WHERE path=?", [p]);
         delFts.run(p);
         delLinks.run(p);
@@ -86,8 +92,36 @@ export function indexNotes(cfg: KbConfig, db: Database, opts: { full?: boolean }
     }
     db.run("INSERT OR REPLACE INTO meta(k,v) VALUES('indexed_at',?)", [new Date().toISOString()]);
   });
-  tx([...walkNotes(cfg)]);
+  tx(scope.notes);
   return { added, updated, removed };
+}
+
+/** Notes at or below the given repo-relative paths (Silver/Gold only), and which index rows those paths cover. */
+function notesUnder(cfg: KbConfig, paths: string[]): { notes: Note[]; covers: (p: string) => boolean } {
+  const roots = [cfg.silver, cfg.gold].map((d) => `${toRel(cfg, d)}/`);
+  const files = new Set<string>(), dirs: string[] = [];
+  for (const raw of paths) {
+    const p = raw.replace(/^\/+|\/+$/g, "");
+    if (!roots.some((r) => `${p}/`.startsWith(r))) continue;
+    const abs = join(cfg.root, p);
+    const isDir = existsSync(abs) ? statSync(abs).isDirectory() : !p.endsWith(".md");
+    if (isDir) {
+      if (existsSync(join(abs, "README.md"))) files.add(`${p}/README.md`);
+      else dirs.push(p);
+    } else if (p.endsWith(".md")) {
+      // log.md / tasks.md of a folder entity belong to its README.md note
+      const dir = dirname(p);
+      files.add(basename(p) !== "README.md" && existsSync(join(cfg.root, dir, "README.md")) ? `${dir}/README.md` : p);
+    }
+  }
+  const notes: Note[] = [];
+  for (const f of files) {
+    const abs = join(cfg.root, f);
+    const n = existsSync(abs) ? readNote(cfg, abs) : null;
+    if (n) notes.push(n);
+  }
+  if (dirs.length) notes.push(...walkNotes(cfg, { dirs: dirs.map((d) => join(cfg.root, d)) }));
+  return { notes, covers: (p) => files.has(p) || dirs.some((d) => p.startsWith(`${d}/`)) };
 }
 
 /** Resolve markdown links + `related:` entries to repo-relative paths. */

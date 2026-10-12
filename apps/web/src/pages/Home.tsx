@@ -59,7 +59,7 @@ export default function Home() {
           </TableBody></Table>
         </section>
       </div>
-      <p className="mt-6 text-sm text-muted-foreground">index: {d.head.slice(0, 7) || "(no git)"} · 件数 {d.counts.map((c) => `${typeLabel(c.type)} ${c.c}`).join(" / ")}</p>
+      <p className="mt-6 text-sm text-muted-foreground">index: {d.head.slice(0, 7) || "(no git)"}{d.unpushed ? ` · 未 push ${d.unpushed} 件` : ""}{d.pushError && <span className="text-destructive"> · push 失敗: {d.pushError}</span>} · 件数 {d.counts.map((c) => `${typeLabel(c.type)} ${c.c}`).join(" / ")}</p>
     </>
   );
 }

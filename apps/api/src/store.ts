@@ -1,4 +1,5 @@
 import { Database } from "bun:sqlite";
+import { EventEmitter } from "node:events";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { env } from "./env";
@@ -37,9 +38,20 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
 const now = () => new Date().toISOString();
 export const newId = () => crypto.randomUUID();
 
-export function createJob(kind: JobKind, payload: unknown): Job {
-  const id = newId();
+/** In-process wakeups so long-polls answer as soon as a job is queued or finished (instead of sleep-polling SQLite). */
+const jobEvents = new EventEmitter().setMaxListeners(0);
+/** Resolves when `event` fires or after `ms`, whichever comes first. */
+export function waitJobEvent(event: "queued" | `done:${string}`, ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const t = setTimeout(done, Math.max(0, ms));
+    function done() { clearTimeout(t); jobEvents.off(event, done); resolve(); }
+    jobEvents.once(event, done);
+  });
+}
+
+export function createJob(kind: JobKind, payload: unknown, id = newId()): Job {
   store.run("INSERT INTO jobs(id,kind,status,payload,created_at) VALUES(?,?,?,?,?)", [id, kind, "queued", JSON.stringify(payload), now()]);
+  jobEvents.emit("queued");
   return getJob(id)!;
 }
 export function getJob(id: string): Job | null {
@@ -53,10 +65,11 @@ export function listJobs(limit = 50): Job[] {
 export function pruneSearchJobs(maxMinutes = 60) {
   store.run("DELETE FROM jobs WHERE kind='search' AND status IN ('done','failed') AND finished_at < ?", [new Date(Date.now() - maxMinutes * 60000).toISOString()]);
 }
-/** Atomically claim the oldest queued job. */
-export function claimNextJob(): Job | null {
+/** Atomically claim the oldest queued job, optionally only of the given kinds. */
+export function claimNextJob(kinds?: string[]): Job | null {
   const tx = store.transaction(() => {
-    const j = store.query("SELECT id FROM jobs WHERE status='queued' ORDER BY created_at LIMIT 1").get() as { id: string } | null;
+    const only = kinds?.length ? ` AND kind IN (${kinds.map(() => "?").join(",")})` : "";
+    const j = store.query(`SELECT id FROM jobs WHERE status='queued'${only} ORDER BY created_at LIMIT 1`).get(...(kinds ?? [])) as { id: string } | null;
     if (!j) return null;
     store.run("UPDATE jobs SET status='running', started_at=? WHERE id=?", [now(), j.id]);
     return getJob(j.id);
@@ -68,10 +81,12 @@ export function appendJobLog(id: string, text: string) {
 }
 export function finishJob(id: string, ok: boolean, result: unknown, commit?: string | null) {
   store.run("UPDATE jobs SET status=?, result=?, commit_sha=?, finished_at=? WHERE id=?", [ok ? "done" : "failed", JSON.stringify(result ?? null), commit ?? null, now(), id]);
+  jobEvents.emit(`done:${id}`);
 }
 /** Re-queue jobs stuck in running for too long (worker died). */
 export function requeueStale(maxMinutes = 60) {
-  store.run("UPDATE jobs SET status='queued', started_at=NULL WHERE status='running' AND started_at < ?", [new Date(Date.now() - maxMinutes * 60000).toISOString()]);
+  const r = store.run("UPDATE jobs SET status='queued', started_at=NULL WHERE status='running' AND started_at < ?", [new Date(Date.now() - maxMinutes * 60000).toISOString()]);
+  if (r.changes) jobEvents.emit("queued");
 }
 
 export function addInboxItem(it: Omit<InboxItem, "created_at" | "fetched">) {

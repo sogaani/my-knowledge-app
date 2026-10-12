@@ -20,7 +20,8 @@ export default function Note() {
   const [edit, setEdit] = useState<Record<string, string> | null>(null);
   const [line, setLine] = useState("");
   const [err, setErr] = useState<unknown>(null);
-  const load = () => api.note(path).then(async (d) => { setN(d); setDef((await api.types()).find((t) => t.type === d.type) ?? null); }).catch(setErr);
+  const show = (d: NoteDetail, types: TypeDef[]) => { setN(d); setDef(types.find((t) => t.type === d.type) ?? null); };
+  const load = () => Promise.all([api.note(path), api.types()]).then(([d, types]) => show(d, types)).catch(setErr);
   useEffect(() => { setN(null); setEdit(null); setErr(null); load(); }, [path]);
   const save = useAction(async () => {
     if (!edit || !n) return;
@@ -30,11 +31,11 @@ export default function Note() {
       if (v === orig) continue;
       patch[k] = k === "tags" ? v.split(/[,\s]+/).filter(Boolean) : v === "" ? "" : /^-?\d+(\.\d+)?$/.test(v) ? Number(v) : v;
     }
-    await api.patch(path, { fm: patch }); setEdit(null); await load();
+    show(await api.patch(path, { fm: patch }), await api.types()); setEdit(null);
   }, { success: "保存しました" });
   const append = useAction(async () => {
     if (!n || !line.trim()) return;
-    await api.patch(path, { append: { section: n.type === "project" ? "現状" : "履歴", line } }); setLine(""); await load();
+    show(await api.patch(path, { append: { section: n.type === "project" ? "現状" : "履歴", line } }), await api.types()); setLine("");
   }, { success: "追記しました" });
   if (err && !n) return <Err e={err} />;
   if (!n) return <Loading rows={6} />;

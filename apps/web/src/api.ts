@@ -4,12 +4,12 @@ export interface Job { id: string; kind: string; status: "queued" | "running" | 
 export interface ChatMessage { id: string; role: "user" | "assistant"; text: string; sources: string; job_id: string | null; created_at: string }
 export interface SearchMatch { path: string; heading: string; snippet: string; spoiler: boolean; via: ("vector" | "keyword")[] }
 export interface SearchHit { path: string; type: string; title: string; status: string; summary: string; tags: string[]; updated: string; archived: boolean; score: number; matches: SearchMatch[] }
-export interface SearchResponse { hits: SearchHit[]; mode: "hybrid" | "vector" | "keyword"; degraded?: string; job?: string }
+export interface SearchResponse { hits: SearchHit[]; mode: "hybrid" | "vector" | "keyword"; degraded?: string; job?: string; queuedMs?: number | null; workerMs?: number | null }
 export interface TypeDef { type: string; folder: string; entity: string; statuses: string[]; fields: string[] }
 export interface Home {
   counts: { type: string; c: number }[]; monthlySubscriptions: number; activeSubscriptions: number;
   books: Record<string, number>; media: Record<string, number>; projects: NoteSummary[]; recent: NoteSummary[]; jobs: Job[];
-  lint: Record<string, string[]>; head: string;
+  lint: Record<string, string[]>; head: string; unpushed?: number; pushError?: string | null;
 }
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
@@ -20,13 +20,16 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   }
   return res.json() as Promise<T>;
 }
+/** Type definitions only change with a deploy: fetch once per page load. */
+let typesCache: Promise<TypeDef[]> | null = null;
 export const api = {
   home: () => req<Home>("/home"),
-  types: () => req<TypeDef[]>("/types"),
+  types: () => (typesCache ??= req<TypeDef[]>("/types").catch((e) => { typesCache = null; throw e; })),
   notes: (p: Record<string, string>) => req<NoteSummary[]>(`/notes?${new URLSearchParams(p)}`),
   note: (path: string) => req<NoteDetail>(`/notes/${path}`),
   search: (p: Record<string, string>) => req<SearchResponse>(`/search?${new URLSearchParams(p)}`),
-  patch: (path: string, body: { fm?: Record<string, unknown>; append?: { section: string; line: string } }) => req<{ fm: Record<string, unknown> }>(`/notes/${path}`, { method: "PATCH", body: JSON.stringify(body) }),
+  /** Answers with the updated note, so the page can render it without another GET. */
+  patch: (path: string, body: { fm?: Record<string, unknown>; append?: { section: string; line: string } }) => req<NoteDetail>(`/notes/${path}`, { method: "PATCH", body: JSON.stringify(body) }),
   create: (body: { type: string; title: string; set?: Record<string, unknown>; force?: boolean }) => req<{ path: string }>("/notes", { method: "POST", body: JSON.stringify(body) }),
   gold: (name: string) => req<{ markdown: string }>(`/gold/${name}`),
   react: (body: { id: string; reaction: "read" | "dismissed"; title?: string; type?: "book" | "media" }) => req<{ ok: boolean; created: string | null }>("/suggestions/react", { method: "POST", body: JSON.stringify(body) }),

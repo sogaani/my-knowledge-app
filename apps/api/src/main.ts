@@ -3,22 +3,40 @@ import { serveStatic } from "hono/bun";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import {
-  runQuery, parseFilters, readNote, patchFrontmatter, createNote, DuplicateError, gitCommitPush, lint, extractLinks,
+  runQuery, parseFilters, readNote, patchFrontmatter, createNote, DuplicateError, extractLinks,
   keywordSearch, LAYOUT, GOLD, SILVER_PREFIX, GOLD_PREFIX, type SearchResponse, type SearchMode,
 } from "@kb/core";
 import { env } from "./env";
 import { authenticate, requireUser, requireWorker, requireInboxWriter, requireUserOrWorker, type Principal } from "./auth";
-import { cfg, reg, db, sync, head, reindex, isGitRepo, rebuildGold } from "./kb";
+import { cfg, reg, db, sync, head, rebuildGold, commitKb, cachedLint, pushState, isGitRepo } from "./kb";
 import {
-  createJob, getJob, listJobs, claimNextJob, appendJobLog, finishJob, requeueStale, pruneSearchJobs,
+  createJob, getJob, listJobs, claimNextJob, appendJobLog, finishJob, requeueStale, pruneSearchJobs, waitJobEvent,
   addInboxItem, inboxItemNameExists, inboxItemsForJob, getInboxItem, markInboxFetched, addChat, listChat, newId, type JobKind,
   addPushSubscription, deletePushSubscription, listPushSubscriptions,
 } from "./store";
 import { pushEnabled, sendPushToAll } from "./push";
 
-type Vars = { principal: Principal };
+type Vars = { principal: Principal; timing: [string, number][] };
 const app = new Hono<{ Variables: Vars }>();
 const api = new Hono<{ Variables: Vars }>();
+
+/** Per-request timing: a Server-Timing header (DevTools → Network → Timing) and a `[t]` log line. */
+api.use("*", async (c, next) => {
+  const t0 = performance.now();
+  c.set("timing", []);
+  await next();
+  const total = performance.now() - t0;
+  const parts = c.get("timing").map(([k, ms]) => `${k};dur=${ms.toFixed(1)}`);
+  c.header("Server-Timing", [...parts, `app;dur=${total.toFixed(1)}`].join(", "));
+  if (!c.req.path.startsWith("/api/worker/jobs/next")) {
+    console.log(`[t] ${c.req.method} ${c.req.path} ${c.res.status} ${total.toFixed(0)}ms${parts.length ? ` (${c.get("timing").map(([k, ms]) => `${k}=${ms.toFixed(0)}`).join(" ")})` : ""}`);
+  }
+});
+/** Measure one step of a request into Server-Timing. */
+async function timed<T>(c: { get: (k: "timing") => [string, number][] }, name: string, f: () => T | Promise<T>): Promise<T> {
+  const t0 = performance.now();
+  try { return await f(); } finally { c.get("timing").push([name, performance.now() - t0]); }
+}
 api.use("*", authenticate);
 
 const safePath = (p: string) => {
@@ -26,12 +44,6 @@ const safePath = (p: string) => {
   if (rel.includes("..") || !(rel.startsWith(SILVER_PREFIX) || rel.startsWith(GOLD_PREFIX))) return null;
   return rel;
 };
-async function commitKb(paths: string[], message: string) {
-  if (!isGitRepo) return null;
-  const sha = await gitCommitPush(cfg.root, paths, message, { author: env.gitAuthor });
-  reindex();
-  return sha;
-}
 
 // ---- user routes ----
 api.get("/me", (c) => c.json({ principal: c.get("principal"), kbRoot: cfg.root }));
@@ -47,7 +59,8 @@ api.get("/home", requireUser, async (c) => {
   const byStatus = (xs: typeof books) => xs.reduce<Record<string, number>>((a, x) => ((a[x.status] = (a[x.status] ?? 0) + 1), a), {});
   return c.json({
     counts, monthlySubscriptions: Math.round(monthly), activeSubscriptions: subs.length,
-    books: byStatus(books), media: byStatus(media), projects, recent, jobs: listJobs(8), lint: lint(cfg, db), head: await head(),
+    books: byStatus(books), media: byStatus(media), projects, recent, jobs: listJobs(8),
+    lint: await timed(c, "lint", cachedLint), head: head(), unpushed: pushState.unpushed, pushError: pushState.error,
   });
 });
 
@@ -78,30 +91,33 @@ api.get("/search", requireUser, async (c) => {
   const keyword = (degraded?: string): SearchResponse => ({ hits: keywordSearch(db, query, filters, { includeArchive, limit }), mode: "keyword", degraded });
   if (!query || mode === "keyword") return c.json(keyword());
   const job = createJob("search", { query, mode, filters: filterStr, includeArchive, limit });
-  const done = await waitForJob(job.id, SEARCH_TIMEOUT_MS);
+  const done = await timed(c, "wait", () => waitForJob(job.id, SEARCH_TIMEOUT_MS));
+  // queue = until the worker claimed it, worker = claim → done (includes the tunnel round trip of the result)
+  const ms = (a?: string | null, b?: string | null) => (a && b ? Date.parse(b) - Date.parse(a) : null);
+  const queuedMs = ms(done?.created_at, done?.started_at), workerMs = ms(done?.started_at, done?.finished_at);
+  if (queuedMs !== null) c.get("timing").push(["queue", queuedMs]);
+  if (workerMs !== null) c.get("timing").push(["worker", workerMs]);
   if (done?.status === "done" && done.result) {
     const r = JSON.parse(done.result) as SearchResponse;
-    if (Array.isArray(r.hits)) return c.json({ ...r, job: job.id });
+    if (Array.isArray(r.hits)) return c.json({ ...r, job: job.id, queuedMs, workerMs });
   }
-  return c.json({ ...keyword(done?.status === "failed" ? `worker: ${String(done.result ?? "failed").slice(0, 200)}` : "worker-timeout"), job: job.id });
+  return c.json({ ...keyword(done?.status === "failed" ? `worker: ${String(done.result ?? "failed").slice(0, 200)}` : "worker-timeout"), job: job.id, queuedMs, workerMs });
 });
+/** Wait until the job is done/failed or the timeout passes; woken by finishJob, not by polling. */
 async function waitForJob(id: string, timeoutMs: number) {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const j = getJob(id);
-    if (!j || j.status === "done" || j.status === "failed") return j;
-    if (Date.now() > deadline) return j;
-    await Bun.sleep(150);
+    if (!j || j.status === "done" || j.status === "failed" || Date.now() >= deadline) return j;
+    await waitJobEvent(`done:${id}`, deadline - Date.now());
   }
 }
 
-api.get("/notes/*", requireUser, (c) => {
-  const rel = safePath(c.req.path.replace(/^\/api\/notes\//, ""));
-  if (!rel) return c.json({ error: "bad path" }, 400);
+/** The note page payload (GET, and the answer to PATCH so the page needs no reload). */
+function noteDetail(rel: string) {
   const abs = join(cfg.root, rel);
-  if (!existsSync(abs)) return c.json({ error: "not found" }, 404);
   const note = readNote(cfg, abs);
-  if (!note) return c.json({ error: "not a note" }, 400);
+  if (!note) return null;
   const backlinks = (db.query("SELECT src FROM links WHERE dst=?").all(rel) as { src: string }[]).map((r) => r.src);
   const attachments: Record<string, string> = {};
   if (rel.endsWith("/README.md")) {
@@ -110,7 +126,14 @@ api.get("/notes/*", requireUser, (c) => {
       if (existsSync(p)) attachments[f] = readFileSync(p, "utf8");
     }
   }
-  return c.json({ path: note.path, type: note.type, title: note.title, fm: note.fm, body: note.body, archived: note.archived, links: extractLinks(note), backlinks, attachments });
+  return { path: note.path, type: note.type, title: note.title, fm: note.fm, body: note.body, archived: note.archived, links: extractLinks(note), backlinks, attachments };
+}
+api.get("/notes/*", requireUser, (c) => {
+  const rel = safePath(c.req.path.replace(/^\/api\/notes\//, ""));
+  if (!rel) return c.json({ error: "bad path" }, 400);
+  if (!existsSync(join(cfg.root, rel))) return c.json({ error: "not found" }, 404);
+  const d = noteDetail(rel);
+  return d ? c.json(d) : c.json({ error: "not a note" }, 400);
 });
 
 api.patch("/notes/*", requireUser, async (c) => {
@@ -131,15 +154,15 @@ api.patch("/notes/*", requireUser, async (c) => {
   const errors = reg.validate(fm).filter((e) => !errorsBefore.has(e));
   if (errors.length) { writeFileSync(abs, before); return c.json({ error: "invalid", errors }, 422); }
   const p = c.get("principal");
-  const commit = await commitKb([rel], `web: update ${rel}\n\nby ${p.kind === "user" ? p.email : p.name}`).catch((e) => ({ error: String(e) }));
-  return c.json({ fm, commit });
+  const commit = await timed(c, "commit", () => commitKb([rel], `web: update ${rel}\n\nby ${p.kind === "user" ? p.email : p.name}`).catch((e) => ({ error: String(e) })));
+  return c.json({ ...noteDetail(rel), fm, commit });
 });
 
 api.post("/notes", requireUser, async (c) => {
   const body = (await c.req.json()) as { type: string; title: string; set?: Record<string, unknown>; force?: boolean };
   try {
     const rel = createNote(cfg, reg, db, { type: body.type, title: body.title, set: body.set, force: body.force });
-    const commit = await commitKb([rel.replace(/\/README\.md$/, "")], `web: new ${body.type} ${body.title}`).catch((e) => ({ error: String(e) }));
+    const commit = await timed(c, "commit", () => commitKb([rel.replace(/\/README\.md$/, "")], `web: new ${body.type} ${body.title}`).catch((e) => ({ error: String(e) })));
     return c.json({ path: rel, commit });
   } catch (e) {
     if (e instanceof DuplicateError) return c.json({ error: "duplicate", matches: e.matches }, 409);
@@ -186,7 +209,7 @@ api.post("/suggestions/react", requireUser, async (c) => {
   if (reaction === "read" && title && type) {
     try { created = createNote(cfg, reg, db, { type, title, set: { status: "want", summary: "おすすめから追加" } }); paths.push(created); } catch {}
   }
-  const commit = await commitKb(paths, `web: suggestion ${id} ${reaction}`).catch((e) => ({ error: String(e) }));
+  const commit = await timed(c, "commit", () => commitKb(paths, `web: suggestion ${id} ${reaction}`).catch((e) => ({ error: String(e) })));
   return c.json({ ok: true, created, commit });
 });
 
@@ -231,14 +254,9 @@ api.post("/inbox", requireInboxWriter, async (c) => {
   console.log(`inbox: ${who.kind}/${who.kind === "user" ? who.email : who.name} staged ${items.length} skipped ${skipped.length}`);
   // Everything already staged earlier: still 200 so an idempotent pusher can mark its side as done.
   if (!items.length) return skipped.length ? c.json({ job: null, items, skipped }) : c.json({ error: "nothing to ingest" }, 400);
-  const job = createJobWithId(jobId, "ingest", { items });
+  const job = createJob("ingest", { items }, jobId);
   return c.json({ job, items, skipped });
 });
-function createJobWithId(id: string, kind: JobKind, payload: unknown) {
-  const { store } = require("./store") as typeof import("./store");
-  store.run("INSERT INTO jobs(id,kind,status,payload,created_at) VALUES(?,?,?,?,?)", [id, kind, "queued", JSON.stringify(payload), new Date().toISOString()]);
-  return getJob(id)!;
-}
 
 api.get("/jobs", requireUser, (c) => c.json(listJobs(Number(c.req.query("limit") ?? 50))));
 api.get("/jobs/:id", requireUser, (c) => { const j = getJob(c.req.param("id") ?? ""); return j ? c.json(j) : c.json({ error: "not found" }, 404); });
@@ -259,22 +277,24 @@ api.post("/chat", requireUser, async (c) => {
 
 api.post("/sync", requireUser, async (c) => c.json(await sync("manual")));
 api.post("/build", requireUser, async (c) => {
-  const files = rebuildGold();
-  const commit = await commitKb([LAYOUT.gold], "web: kb build").catch((e) => ({ error: String(e) }));
+  const files = await timed(c, "build", rebuildGold);
+  const commit = await timed(c, "commit", () => commitKb([LAYOUT.gold], "web: kb build").catch((e) => ({ error: String(e) })));
   return c.json({ files, commit });
 });
 
 // ---- worker routes ----
 const w = new Hono<{ Variables: Vars }>();
 w.use("*", requireWorker);
+/** Long-poll for the next job. `kinds=search` lets the worker run searches in their own lane, beside long agent jobs. */
 w.get("/jobs/next", async (c) => {
   const wait = Math.min(Number(c.req.query("wait") ?? 25), 55);
+  const kinds = (c.req.query("kinds") ?? "").split(",").filter(Boolean);
   const deadline = Date.now() + wait * 1000;
   for (;;) {
-    const j = claimNextJob();
+    const j = claimNextJob(kinds);
     if (j) return c.json({ ...j, inbox: j.kind === "ingest" ? inboxItemsForJob(j.id).map(({ path, ...i }) => i) : [] });
-    if (Date.now() > deadline) return c.body(null, 204);
-    await Bun.sleep(250);
+    if (Date.now() >= deadline) return c.body(null, 204);
+    await waitJobEvent("queued", deadline - Date.now());
   }
 });
 w.get("/inbox/:id", (c) => {

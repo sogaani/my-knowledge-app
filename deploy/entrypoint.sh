@@ -15,17 +15,24 @@ git config user.name "${GIT_USER_NAME:-kb-web}"
 git config user.email "${GIT_USER_EMAIL:-kb-web@local}"
 # Unlock once per clone. `git-crypt unlock` stores the key under .git/git-crypt/keys/ and that survives on the PVC;
 # testing `git-crypt status -e` here was wrong (it lists encrypted paths whether or not the repo is unlocked, so an
-# already-encrypted repo was never unlocked and 22/23/27 + the encrypted Gold views stayed unreadable to the API).
+# already-encrypted repo was never unlocked and 202/203/207 + the encrypted Gold views stayed unreadable to the API).
 if [ -f /secrets/git-crypt/key ]; then
   if [ -f .git/git-crypt/keys/default ]; then
     echo "git-crypt: already unlocked"
   elif git-crypt unlock /secrets/git-crypt/key; then
     echo "git-crypt: unlocked"
   else
-    echo "git-crypt: unlock FAILED; encrypted notes (22/23/27, Gold 32/33) will be missing from the index" >&2
+    echo "git-crypt: unlock FAILED; encrypted notes (202/203/207, Gold 302/303/308) will be missing from the index" >&2
   fi
 else
   echo "git-crypt: no key mounted; encrypted notes will be missing from the index" >&2
+fi
+# Bring an existing clone up to date before the API starts: it reads schemas and folders at import time, before its
+# own first sync, so a layout change in the data repo (e.g. the 2026-10 three-digit renumbering) would crash-loop it.
+if git pull --ff-only --quiet; then
+  echo "git: $(git rev-parse --short HEAD)"
+else
+  echo "git: pull failed; starting on $(git rev-parse --short HEAD)" >&2
 fi
 cd /app
 exec "$@"

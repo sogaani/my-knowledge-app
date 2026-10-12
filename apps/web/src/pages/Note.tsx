@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { PencilIcon } from "lucide-react";
 import { api, type NoteDetail, type TypeDef } from "@/api";
-import Md from "@/components/Md";
+import Md, { routeFor } from "@/components/Md";
 import { Chip, Choice, Err, Loading, Toolbar } from "@/components/common";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -84,8 +84,8 @@ export default function Note() {
       </form>
       {(n.backlinks.length > 0 || n.links.length > 0) && (
         <p className="text-sm text-muted-foreground">
-          {n.links.length > 0 && <>リンク先: {n.links.map((l) => <Link key={l} to={`/note/${l}`}>{l.split("/").pop()}</Link>).reduce<React.ReactNode[]>((a, x, i) => (i ? [...a, " · ", x] : [x]), [])}<br /></>}
-          {n.backlinks.length > 0 && <>被リンク: {n.backlinks.map((l) => <Link key={l} to={`/note/${l}`}>{l.split("/").pop()}</Link>).reduce<React.ReactNode[]>((a, x, i) => (i ? [...a, " · ", x] : [x]), [])}</>}
+          {n.links.length > 0 && <>リンク先: {n.links.map((l) => <Link key={l} to={routeFor(l)}>{l.split("/").pop()}</Link>).reduce<React.ReactNode[]>((a, x, i) => (i ? [...a, " · ", x] : [x]), [])}<br /></>}
+          {n.backlinks.length > 0 && <>被リンク: {n.backlinks.map((l) => <Link key={l} to={routeFor(l)}>{l.split("/").pop()}</Link>).reduce<React.ReactNode[]>((a, x, i) => (i ? [...a, " · ", x] : [x]), [])}</>}
         </p>
       )}
     </>

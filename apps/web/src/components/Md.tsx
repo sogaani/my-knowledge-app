@@ -2,7 +2,11 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Link } from "react-router-dom";
 
-/** Render note markdown: resolves relative .md links to /note/<path>, folds `> [!spoiler]-` blocks. */
+const GOLD_PREFIX = "300_gold/";
+/** In-app route for a repo-relative .md path: Gold pages have their own view (they are not notes). */
+export const routeFor = (path: string) => (path.startsWith(GOLD_PREFIX) ? `/gold/${path.slice(GOLD_PREFIX.length).replace(/\.md$/, "")}` : `/note/${path}`);
+
+/** Render note markdown: resolves relative .md links to /note/<path> (or /gold/<name>), folds `> [!spoiler]-` blocks. */
 export default function Md({ text, basePath }: { text: string; basePath: string }) {
   const parts = splitSpoilers(text);
   return (
@@ -25,7 +29,7 @@ function Body({ text, basePath }: { text: string; basePath: string }) {
       components={{
         a: ({ href, children }) => {
           if (href && !/^https?:|^mailto:|^#/.test(href) && href.endsWith(".md")) {
-            return <Link to={`/note/${resolve(basePath, href)}`}>{children}</Link>;
+            return <Link to={routeFor(resolve(basePath, decodeURIComponent(href)))}>{children}</Link>;
           }
           return <a href={href} target="_blank" rel="noreferrer">{children}</a>;
         },

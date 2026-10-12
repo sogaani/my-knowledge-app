@@ -1,4 +1,5 @@
-import { NavLink, Route, Routes } from "react-router-dom";
+import { NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom";
+import { routeFor } from "@/components/Md";
 import { Toaster } from "@/components/ui/sonner";
 import { cn } from "@/lib/utils";
 import Home from "./pages/Home";
@@ -9,6 +10,7 @@ import Chat from "./pages/Chat";
 import Suggestions from "./pages/Suggestions";
 import Trading from "./pages/Trading";
 import Jobs from "./pages/Jobs";
+import Gold from "./pages/Gold";
 
 const TYPES: [string, string][] = [
   ["book", "読書"], ["media", "映画・ドラマ"], ["subscription", "サブスク"], ["finance_account", "金融"],
@@ -39,10 +41,10 @@ export default function App() {
         <Item to="/chat">チャット</Item>
         <Item to="/suggestions">おすすめ</Item>
         <Item to="/trading">売買</Item>
-        <Item to="/note/300_gold/300_market.md">市場メモ</Item>
-        <Item to="/note/300_gold/390_daily.md">ライフログ</Item>
-        <Item to="/note/300_gold/391_trends.md">トレンド</Item>
-        <Item to="/note/300_gold/392_upcoming.md">これからの予定</Item>
+        <Item to="/gold/300_market">市場メモ</Item>
+        <Item to="/gold/390_daily">ライフログ</Item>
+        <Item to="/gold/391_trends">トレンド</Item>
+        <Item to="/gold/392_upcoming">これからの予定</Item>
         <Item to="/jobs">ジョブ</Item>
         <div className="hidden px-2.5 pt-3.5 text-[11px] text-muted-foreground uppercase md:block">ノート</div>
         {TYPES.map(([t, label]) => <Item key={t} to={`/notes/${t}`}>{label}</Item>)}
@@ -58,12 +60,19 @@ export default function App() {
           <Route path="/jobs" element={<Jobs />} />
           <Route path="/notes/:type" element={<Notes />} />
           <Route path="/search" element={<Notes />} />
-          <Route path="/note/*" element={<Note />} />
+          <Route path="/gold/*" element={<Gold />} />
+          <Route path="/note/*" element={<NoteOrGold />} />
         </Routes>
       </main>
       <Toaster position="bottom-right" richColors closeButton />
     </div>
   );
+}
+
+/** Old links / bookmarks to /note/300_gold/… go to the Gold view (Gold pages are not notes). */
+function NoteOrGold() {
+  const path = decodeURIComponent(useLocation().pathname.replace(/^\/note\//, ""));
+  return path.startsWith("300_gold/") ? <Navigate to={routeFor(path)} replace /> : <Note />;
 }
 
 export const typeLabel = (t: string) => TYPES.find(([k]) => k === t)?.[1] ?? t;

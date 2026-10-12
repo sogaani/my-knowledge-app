@@ -147,9 +147,11 @@ api.post("/notes", requireUser, async (c) => {
   }
 });
 
-api.get("/gold/:name", requireUser, (c) => {
-  const name = (c.req.param("name") ?? "").replace(/[^\w.-]/g, "");
-  const abs = join(cfg.gold, name.endsWith(".md") ? name : `${name}.md`);
+/** Gold pages are generated Markdown without frontmatter (so /notes/* does not serve them). Subfolders ok: 304_books/index. */
+api.get("/gold/*", requireUser, (c) => {
+  const name = decodeURIComponent(c.req.path.replace(/^\/api\/gold\//, "")).replace(/\.md$/, "");
+  if (!/^[\w.-]+(\/[\w.-]+)*$/.test(name) || name.split("/").some((s) => s === "." || s === "..")) return c.json({ error: "bad path" }, 400);
+  const abs = join(cfg.gold, `${name}.md`);
   if (!existsSync(abs)) return c.json({ error: "not found" }, 404);
   return c.json({ name, markdown: readFileSync(abs, "utf8") });
 });

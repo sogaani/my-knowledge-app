@@ -24,7 +24,7 @@ launchd daily-ingest（07:00）→ worker → ingest スキル
 |---|---|---|---|
 | `gmail` | Apps Script が `KB/*` ラベルを付け、まだ `KB/取込済` が無いメール。取得後に `KB/取込済` を付ける | Google OAuth（`gmail.modify`） | ラベル基準 |
 | `github` | 自分が作った Issue / PR、自分のコミット（検索 API） | fine-grained PAT（読み取り専用） | 前回の終わり〜今 |
-| `calendar` | 表示中のカレンダー（または `GOOGLE_CALENDAR_IDS`）の、期間内に行われた予定。キャンセル・辞退は除く | Google OAuth | 前回の終わり〜今 |
+| `calendar` | 表示中のカレンダー（または `GOOGLE_CALENDAR_IDS`）の予定。キャンセル・辞退は除く。①実績: 前回の終わり〜今に行われた予定 ②将来: 今〜2 年後（`GOOGLE_CALENDAR_HORIZON_DAYS` で変更可）を毎回取得し、前回から新規・変更・削除になった予定だけを出す（繰り返しはシリーズで 1 件） | Google OAuth | ①前回の終わり〜今 ②今〜2 年後の差分 |
 | `youtube` | 高評価した動画（前回からの差分）と `YOUTUBE_PLAYLIST_IDS` の再生リスト | Google OAuth | 差分（カーソルに既知 ID） |
 | `health` | Google Health API v4 の日別 歩数・距離・消費カロリー・アクティブ時間（`dailyRollUp`）と睡眠（起床日で集計） | Google OAuth（`googlehealth.*.readonly` だけの別トークン。Health API は他のスコープを含むトークンを 403 で拒否する） | 完了した日だけ（昨日まで） |
 | `linkedin` | inbox に置かれた `*LinkedInDataExport*.zip` のプロフィール・職歴・新しいつながり・新しいメッセージ | なし（ZIP を手で置く） | 前回のエクスポートとの差分 |

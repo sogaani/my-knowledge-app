@@ -333,3 +333,52 @@ describe("sources against a fake API", () => {
 });
 
 const ymdOf = (d: Date) => d.toLocaleDateString("sv-SE");
+
+describe("calendar upcoming", () => {
+  const { diffUpcoming, calendar } = require("./sources/calendar") as typeof import("./sources/calendar");
+  const cal = { id: "primary", summary: "私" };
+  const ev = (id: string, start: string, end: string, extra: Record<string, unknown> = {}) => ({ id, status: "confirmed", summary: id, updated: "2026-10-01T00:00:00Z", start: { dateTime: start }, end: { dateTime: end }, ...extra });
+  const weekly = (n: number, from = 13) => Array.from({ length: n }, (_, i) => ev(`std_${i}`, `2026-10-${String(from + i * 7).padStart(2, "0")}T10:00:00+09:00`, `2026-10-${String(from + i * 7).padStart(2, "0")}T10:30:00+09:00`, { recurringEventId: "std", summary: "定例" }));
+  const now = new Date("2026-10-12T06:30:00+09:00");
+
+  test("first run: everything is new, a recurring series is one item", () => {
+    const { items, next } = diffUpcoming({}, [ev("trip", "2027-03-01T09:00:00+09:00", "2027-03-03T18:00:00+09:00"), ...weekly(3)].map((event) => ({ cal, event })), now);
+    expect(items.map((i) => calendar.digest(i))).toEqual([
+      "予定・新規 2027-03-01 09:00–18:00 [私] trip",
+      "予定・新規 繰り返し 3 回（2026-10-13〜2026-10-27） 10:00–10:30 [私] 定例",
+    ]);
+    expect(Object.keys(next).sort()).toEqual(["primary|std", "primary|trip"]);
+  });
+
+  test("next run: only changes; a series that merely slid is unchanged; past events are not 'removed'", () => {
+    const soon = ev("dentist", "2026-10-12T15:00:00+09:00", "2026-10-12T16:00:00+09:00");
+    const { next: prev } = diffUpcoming({}, [soon, ev("trip", "2027-03-01T09:00:00+09:00", "2027-03-03T18:00:00+09:00"), ev("party", "2026-12-24T19:00:00+09:00", "2026-12-24T22:00:00+09:00"), ...weekly(3)].map((event) => ({ cal, event })), now);
+    const tomorrow = new Date("2026-10-13T06:30:00+09:00");
+    const moved = ev("trip", "2027-03-02T09:00:00+09:00", "2027-03-04T18:00:00+09:00", { updated: "2026-10-12T12:00:00Z" });
+    const { items } = diffUpcoming(prev, [moved, ...weekly(3, 20)].map((event) => ({ cal, event })), tomorrow); // dentist happened, party deleted
+    expect(items.map((i) => calendar.digest(i))).toEqual([
+      "予定・変更 2027-03-02 09:00–18:00 [私] trip",
+      "予定・削除 2026-12-24 19:00 [私] party",
+    ]);
+  });
+
+  test("collect: past window and the 2-year window are fetched separately; the cursor carries the upcoming state", async () => {
+    const ranges: string[] = [];
+    const http = {
+      async fetch(): Promise<Response> { throw new Error("unused"); },
+      async json<T>(url: string) {
+        if (url.includes("calendarList")) return { items: [{ id: "primary", summary: "私", primary: true, accessRole: "owner" }] } as T;
+        const p = new URL(url).searchParams;
+        ranges.push(`${p.get("timeMin")!.slice(0, 10)}..${p.get("timeMax")!.slice(0, 10)}`);
+        const future = p.get("timeMin")!.startsWith("2026-10-11T21");
+        return { items: future ? [ev("trip", "2027-03-01T09:00:00+09:00", "2027-03-03T18:00:00+09:00")] : [ev("mtg", "2026-10-10T10:00:00+09:00", "2026-10-10T11:00:00+09:00")] } as T;
+      },
+    };
+    const google = { configured: true as const, accessToken: async () => "t" };
+    const r = await calendar.collect({ cfg: {} as KbConfig, env: { GOOGLE_REFRESH_TOKEN: "x" }, http, google, log: { info() {}, warn() {} }, dryRun: false, cursor: undefined, from: new Date("2026-10-05T00:00:00+09:00"), to: now });
+    expect(ranges).toEqual(["2026-10-04..2026-10-11", "2026-10-11..2028-10-11"]);
+    expect(r.items!.map((i) => calendar.digest(i))).toEqual(["実績 2026-10-10 10:00–11:00 [私] mtg", "予定・新規 2027-03-01 09:00–18:00 [私] trip"]);
+    expect(Object.keys(JSON.parse(r.cursor!).upcoming)).toEqual(["primary|trip"]);
+    expect(r.meta).toMatchObject({ horizon: "2028-10-11T21:30:00.000Z", past: 1, upcoming_changes: 1, upcoming_total: 1 });
+  });
+});

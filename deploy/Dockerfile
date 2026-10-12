@@ -8,6 +8,7 @@ COPY packages/core/package.json packages/core/
 COPY apps/cli/package.json apps/cli/
 COPY apps/api/package.json apps/api/
 COPY apps/worker/package.json apps/worker/
+COPY apps/collector/package.json apps/collector/
 COPY apps/web/package.json apps/web/
 RUN bun install --frozen-lockfile
 COPY . .

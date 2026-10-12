@@ -3,8 +3,9 @@ import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, read
 import { basename, extname, join } from "node:path";
 import { today, type KbConfig } from "./config";
 import { decodeText } from "./text";
+import { digestJson } from "./collect/digest";
 
-export type BronzeKind = "web" | "note" | "mail" | "file" | "book" | "image";
+export type BronzeKind = "web" | "note" | "mail" | "file" | "book" | "image" | "feed";
 
 export interface BronzeMeta {
   id: string;
@@ -14,7 +15,7 @@ export interface BronzeMeta {
   sha256: string;
   files: string[];
   title?: string;
-  processed_to: string[]; // silver paths
+  processed_to: string[]; // silver paths; ["-"] = reviewed, nothing to reflect in Silver (`kb processed <id> --none`)
   notes?: string;
 }
 
@@ -32,7 +33,8 @@ function sha256(buf: Uint8Array | string): string {
 export function guessKind(p: string): BronzeKind {
   const e = extname(p).toLowerCase();
   if ([".eml", ".msg"].includes(e)) return "mail";
-  if (e === ".md" && /^mail-/.test(basename(p))) return "mail"; // Gmail pushes rendered as Markdown (mail-YYYYMMDD-<slug>-<id>.md)
+  if ((e === ".md" || e === ".json") && /^mail-/.test(basename(p))) return "mail"; // Gmail (mail-YYYYMMDD-<slug>-<id>.md from the old Apps Script push, .json from the collector)
+  if (e === ".json" && /^collect-/.test(basename(p))) return "feed"; // collector feeds (collect-<source>-<from>_<to>.json)
   if ([".epub", ".mobi"].includes(e)) return "book";
   if ([".png", ".jpg", ".jpeg", ".heic", ".webp"].includes(e)) return "image";
   if ([".md", ".txt"].includes(e)) return "note";
@@ -107,14 +109,17 @@ export function sourceExcerpt(cfg: KbConfig, id: string, opts: { full?: boolean;
   const meta = readMeta(cfg, id);
   if (!meta) return null;
   const dir = bronzeDir(cfg, id);
-  const textFile = meta.files.find((f) => f.endsWith(".md")) ?? meta.files.find((f) => /\.(txt|csv|eml|html)$/i.test(f));
-  let text = "";
+  const textFile = meta.files.find((f) => f.endsWith(".md")) ?? meta.files.find((f) => /\.(txt|csv|eml|html|json)$/i.test(f));
+  let text = "", truncated = false;
   if (textFile) {
     text = decodeText(readFileSync(join(dir, textFile)));
-    if (!opts.full) text = text.slice(0, opts.chars ?? 1500);
+    // collector JSON: show the readable digest; --full still returns the raw JSON
+    if (textFile.endsWith(".json") && !opts.full) text = digestJson(text) ?? text;
+    const limit = opts.chars ?? (meta.kind === "feed" ? 6000 : 1500);
+    if (!opts.full && text.length > limit) { text = text.slice(0, limit); truncated = true; }
   }
   logAccess(cfg, { op: "source", id, full: !!opts.full, bytes: text.length });
-  return { meta, text, truncated: !opts.full && !!textFile && statSync(join(dir, textFile)).size > text.length };
+  return { meta, text, truncated };
 }
 
 /** List inbox entries (files only; skips hidden). */

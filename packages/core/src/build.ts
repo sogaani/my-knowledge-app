@@ -156,6 +156,16 @@ export function buildGold(cfg: KbConfig, db: Database): string[] {
     ].join("\n"));
   }
 
+  // 310 health: monthly health_log notes (git-crypt encrypted in the data repo, like 302/303/308)
+  const logs = q("type=health_log", { orderBy: "-month" });
+  const hm = (v: unknown) => (typeof v === "number" ? `${Math.floor(v / 60)}h${String(v % 60).padStart(2, "0")}m` : "-");
+  out(GOLD.health, [
+    "# 健康記録", "",
+    "Google Health から `bun run collect` → `kb health import` で月ごとの `health_log` に集計。", "",
+    "| 月 | 日数 | 平均歩数 | 平均睡眠 | ノート |", "|---|---|---|---|---|",
+    ...(logs.length ? logs.map((n) => `| ${n.fm.month ?? ""} | ${n.fm.days ?? "-"} | ${typeof n.fm.avg_steps === "number" ? n.fm.avg_steps.toLocaleString("ja-JP") : "-"} | ${hm(n.fm.avg_sleep_min)} | ${link(n)} |`) : ["| （なし） | | | | |"]),
+  ].join("\n"));
+
   // 300 home
   const reviews = q("type=review", { orderBy: "-updated", limit: 5 });
   const recent = runQuery(db, { filters: [], orderBy: "-updated", limit: 15 }).filter((n) => !n.path.startsWith(GOLD_PREFIX));
@@ -171,7 +181,8 @@ export function buildGold(cfg: KbConfig, db: Database): string[] {
     `- [学習](${GOLD.learning}/index.md)`,
     `- [おすすめ](${GOLD.suggestions})`,
     `- [売買シート](${GOLD.trading})${plans.length ? ` — 最新 ${plans[0].fm.date ?? plans[0].updated}` : ""}`,
-    `- [市場メモ](${GOLD.market}) — 銘柄・テーマ・カタリスト`, "",
+    `- [市場メモ](${GOLD.market}) — 銘柄・テーマ・カタリスト`,
+    `- [健康記録](${GOLD.health})`, "",
     "## 最近のレビュー", ...list(reviews), "",
     "## 最近更新したノート", "", "| 更新 | type | ノート | 要約 |", "|---|---|---|---|",
     ...recent.map((n) => `| ${n.updated} | ${n.type} | ${link(n)} | ${n.summary} |`),

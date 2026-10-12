@@ -3,7 +3,7 @@ import { join } from "node:path";
 import {
   loadConfig, openDb, indexNotes, SchemaRegistry, createNote, DuplicateError, patchFrontmatter, appendToSection,
   ingestFile, ingestUrl, sourceExcerpt, markProcessed, listInbox, parseFilters, runQuery, buildGold,
-  validateAll, archiveNote, lint, backupBronze, pruneBronze, logAccess, importPortfolio, type BronzeKind,
+  validateAll, archiveNote, lint, backupBronze, pruneBronze, logAccess, importPortfolio, importHealth, runCollectors, type BronzeKind,
   search, VectorStore, embedNotes, makeEmbedder, setupLindera, linderaStatus, resolveTokenizer, readVectorMeta, type SearchMode,
 } from "@kb/core";
 
@@ -121,10 +121,11 @@ switch (cmd) {
     break;
   }
   case "processed": {
-    const { pos } = flags(argv);
+    const { f, pos } = flags(argv);
     const [id, ...paths] = pos;
-    if (!id || !paths.length) die("usage: kb processed <bronze-id> <silver-path>...");
-    markProcessed(cfg, id, paths);
+    // --none: reviewed, nothing in it belongs in Silver (e.g. a feed with no relevant items)
+    if (!id || (!paths.length && !f.none)) die("usage: kb processed <bronze-id> <silver-path>... | kb processed <bronze-id> --none");
+    markProcessed(cfg, id, paths.length ? paths : ["-"]);
     console.log("ok");
     break;
   }
@@ -261,6 +262,24 @@ switch (cmd) {
     console.log(cfg.root);
     break;
   }
+  case "health": {
+    const { pos } = flags(argv);
+    const [sub, id] = pos;
+    if (sub !== "import" || !id) die("usage: kb health import <bronze-id>   (a collect-health-*.json feed)");
+    const r = importHealth(cfg, reg, db(), id!);
+    for (const m of r.months) console.log(`${m.created ? "created" : "updated"} ${m.path} (${m.days} days)`);
+    if (!r.months.length) console.log(`no days in ${r.bronzeId}; marked processed`);
+    break;
+  }
+  case "collect": {
+    // Scheduled runs use `bun run collect` (apps/collector, loads its .env). Here: sources that need no secrets,
+    // e.g. `kb collect linkedin` from the ingest skill when an export ZIP is waiting in the inbox.
+    const { f, pos } = flags(argv);
+    const reports = await runCollectors(cfg, process.env, { only: pos.length ? pos : undefined, dryRun: !!f["dry-run"] });
+    for (const r of reports) console.log(`${r.id}: ${r.status}${r.reason ? ` (${r.reason})` : ""}${r.written.length ? ` → ${r.written.join(", ")}` : ""}`);
+    if (reports.some((r) => r.status === "failed")) process.exitCode = 1;
+    break;
+  }
   default:
     console.log(`kb — personal knowledge base CLI (KB_ROOT=${cfg.root})
 
@@ -271,7 +290,9 @@ switch (cmd) {
   inbox                              list 000_inbox
   ingest <path|url> [--kind] [--keep] | --all   move into Bronze, print id
   source <id> [--full]               Bronze meta + excerpt (logged)
-  processed <id> <silver-path>...    record which Silver notes came from a Bronze item
+  processed <id> <silver-path>... | <id> --none   record which Silver notes came from a Bronze item (--none: nothing to reflect)
+  health import <bronze-id>          rebuild the monthly health_log notes from a collect-health feed
+  collect [source...] [--dry-run]    run collectors into 000_inbox (secrets: use \`bun run collect\` with apps/collector/.env)
   portfolio import <csv|bronze-id> [--account 楽天証券]   update the portfolio note from a 楽天証券 asset CSV (CP932 ok)
   query [type=book rating>=4] [--text "..."] [--include-archive] [--json] [--limit n] [--order -updated]
   search "<query>" [type=book ...] [--mode hybrid|vector|keyword] [--limit 10] [--include-archive] [--spoilers] [--json]

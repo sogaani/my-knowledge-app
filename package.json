@@ -6,6 +6,7 @@
     "kb": "bun run apps/cli/src/main.ts",
     "api": "bun run --watch apps/api/src/main.ts",
     "worker": "bun --env-file=apps/worker/.env run apps/worker/src/main.ts",
+    "collect": "bun --env-file=apps/collector/.env run apps/collector/src/main.ts",
     "web": "bun run --cwd apps/web dev",
     "build:web": "bun run --cwd apps/web build",
     "test": "bun test",

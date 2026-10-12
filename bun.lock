@@ -32,6 +32,13 @@
         "@kb/core": "workspace:*",
       },
     },
+    "apps/collector": {
+      "name": "@kb/collector",
+      "version": "0.1.0",
+      "dependencies": {
+        "@kb/core": "workspace:*",
+      },
+    },
     "apps/web": {
       "name": "@kb/web",
       "version": "0.1.0",
@@ -270,6 +277,8 @@
     "@kb/api": ["@kb/api@workspace:apps/api"],
 
     "@kb/cli": ["@kb/cli@workspace:apps/cli"],
+
+    "@kb/collector": ["@kb/collector@workspace:apps/collector"],
 
     "@kb/core": ["@kb/core@workspace:packages/core"],
 

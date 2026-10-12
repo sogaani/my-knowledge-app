@@ -63,6 +63,7 @@ export const GOLD = {
   projects: "306_projects.md",
   suggestions: "307_suggestions.md",
   trading: "308_trading.md",
+  health: "310_health.md",
 } as const;
 
 /** Repo-relative prefixes, for `path.startsWith(...)` and SQL `LIKE` checks. */

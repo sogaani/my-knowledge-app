@@ -1,8 +1,8 @@
 /** Shared KB handle for the API: config, schema registry, index DB, git sync. */
 import { existsSync } from "node:fs";
 import {
-  loadConfig, openDb, indexNotes, SchemaRegistry, gitPull, gitHead, gitCommit, gitPush, gitChangedFiles, gitUnpushed, buildGold, lint,
-  type LintReport,
+  loadConfig, openDb, indexNotes, SchemaRegistry, git, gitPull, gitHead, gitCommit, gitPush, gitChangedFiles, gitUnpushed, buildGold, lint,
+  LAYOUT, type LintReport,
 } from "@kb/core";
 import { env } from "./env";
 
@@ -44,6 +44,11 @@ export async function sync(reason: string): Promise<{ changed: boolean; head: st
         // The index DB lives in an emptyDir and is empty on every start: the first sync must always index,
         // even when the pull brings nothing new (this used to be checked after lastHead was already set).
         const first = !lastHead;
+        // Edits a previous pod wrote but never committed are still on the volume: commit them first.
+        if (first && (await git(cfg.root, "status", "--porcelain", "--", LAYOUT.silver, LAYOUT.gold))) {
+          for (const p of [LAYOUT.silver, LAYOUT.gold]) pending.set(p, "web: commit edits left uncommitted by a restart");
+        }
+        await flushCommits().catch((e) => console.error(`[sync:${reason}] commit failed:`, (e as Error).message));
         const { before, after } = await gitPull(cfg.root, { rebase: true });
         lastHead = after;
         pushState.unpushed = await gitUnpushed(cfg.root); // also picks up commits a previous pod could not push
@@ -61,45 +66,67 @@ export async function sync(reason: string): Promise<{ changed: boolean; head: st
       return { changed: false, head: lastHead };
     } finally {
       syncing = null;
-      if (pushState.unpushed) schedulePush();
+      if (pushState.unpushed || pending.size) scheduleFlush();
     }
   });
   return syncing as Promise<{ changed: boolean; head: string }>;
 }
 
 /**
- * Commit web edits locally and answer right away; the push to GitHub runs in the background (see schedulePush).
- * `paths` may be files or folders.
+ * Index web edits right away and answer; the commit and the push to GitHub run in the background
+ * (scheduleFlush), batched when several edits arrive close together. `paths` may be files or folders.
  */
-export async function commitKb(paths: string[], message: string): Promise<string | null> {
-  if (!isGitRepo) { reindex({ paths }); return null; }
-  const sha = await serialGit(() => gitCommit(cfg.root, paths, message, { author: env.gitAuthor }));
+export function commitKb(paths: string[], message: string): "queued" | null {
   reindex({ paths });
-  if (sha) { lastHead = sha; pushState.unpushed++; schedulePush(); }
-  return sha;
+  if (!isGitRepo) return null;
+  for (const p of paths) pending.set(p, message);
+  scheduleFlush();
+  return "queued";
+}
+
+/** Written but not yet committed: repo-relative path → commit message. */
+const pending = new Map<string, string>();
+/** Commit everything pending as one commit. Runs inside serialGit. On failure the paths stay pending. */
+async function flushCommits() {
+  if (!pending.size) return;
+  const batch = new Map(pending);
+  pending.clear();
+  const messages = [...new Set(batch.values())];
+  const message = messages.length === 1 ? messages[0] : `web: ${messages.length} edits\n\n${messages.map((m) => `- ${m.split("\n")[0]}`).join("\n")}`;
+  try {
+    const sha = await gitCommit(cfg.root, [...batch.keys()], message, { author: env.gitAuthor });
+    if (sha) lastHead = sha;
+  } catch (e) {
+    for (const [p, m] of batch) if (!pending.has(p)) pending.set(p, m);
+    throw e;
+  }
 }
 
 export const pushState = { unpushed: 0, error: null as string | null };
-let pushTimer: ReturnType<typeof setTimeout> | null = null;
-/** Debounced: commits made while a push is pending go out together. Retries every minute after a failure. */
-function schedulePush(delayMs = 300) {
-  if (pushTimer) return;
-  pushTimer = setTimeout(() => {
-    pushTimer = null;
+/** Commits not on GitHub yet plus edits not committed yet (shown on Home). */
+export const unsavedCount = () => pushState.unpushed + pending.size;
+let flushTimer: ReturnType<typeof setTimeout> | null = null;
+/** Debounced commit + push: edits made while one is pending go out together. Retries every minute after a failure. */
+function scheduleFlush(delayMs = 300) {
+  if (flushTimer) return;
+  flushTimer = setTimeout(() => {
+    flushTimer = null;
     serialGit(async () => {
       const t0 = Date.now();
       try {
+        await flushCommits();
+        const t1 = Date.now();
         const before = await gitHead(cfg.root);
         const after = await gitPush(cfg.root);
         pushState.unpushed = await gitUnpushed(cfg.root);
         pushState.error = null;
         lastHead = after;
         if (after !== before) await reindexBetween(before, after); // rebased onto commits pushed by the worker
-        console.log(`[push] ${after.slice(0, 7)} ${Date.now() - t0}ms`);
+        console.log(`[push] ${after.slice(0, 7)} commit=${t1 - t0}ms push=${Date.now() - t1}ms`);
       } catch (e) {
         pushState.error = (e as Error).message.slice(0, 300);
         console.error("[push] failed:", pushState.error);
-        schedulePush(60_000);
+        scheduleFlush(60_000);
       }
     });
   }, delayMs);

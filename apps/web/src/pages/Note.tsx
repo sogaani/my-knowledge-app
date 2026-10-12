@@ -31,11 +31,17 @@ export default function Note() {
       if (v === orig) continue;
       patch[k] = k === "tags" ? v.split(/[,\s]+/).filter(Boolean) : v === "" ? "" : /^-?\d+(\.\d+)?$/.test(v) ? Number(v) : v;
     }
-    show(await api.patch(path, { fm: patch }), await api.types()); setEdit(null);
+    // Optimistic: show the new values at once; the answer (or a rollback on error, e.g. 422) follows.
+    const prev = n, draft = edit;
+    setN({ ...n, fm: { ...n.fm, ...patch } }); setEdit(null);
+    try { show(await api.patch(path, { fm: patch }), await api.types()); }
+    catch (e) { setN(prev); setEdit(draft); throw e; }
   }, { success: "保存しました" });
   const append = useAction(async () => {
     if (!n || !line.trim()) return;
-    show(await api.patch(path, { append: { section: n.type === "project" ? "現状" : "履歴", line } }), await api.types()); setLine("");
+    const text = line; setLine(""); // the body updates when the answer arrives
+    try { show(await api.patch(path, { append: { section: n.type === "project" ? "現状" : "履歴", line: text } }), await api.types()); }
+    catch (e) { setLine(text); throw e; }
   }, { success: "追記しました" });
   if (err && !n) return <Err e={err} />;
   if (!n) return <Loading rows={6} />;

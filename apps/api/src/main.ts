@@ -8,7 +8,7 @@ import {
 } from "@kb/core";
 import { env } from "./env";
 import { authenticate, requireUser, requireWorker, requireInboxWriter, requireUserOrWorker, type Principal } from "./auth";
-import { cfg, reg, db, sync, head, rebuildGold, commitKb, cachedLint, pushState, isGitRepo } from "./kb";
+import { cfg, reg, db, sync, head, rebuildGold, commitKb, cachedLint, pushState, unsavedCount, isGitRepo } from "./kb";
 import {
   createJob, getJob, listJobs, claimNextJob, appendJobLog, finishJob, requeueStale, pruneSearchJobs, waitJobEvent,
   addInboxItem, inboxItemNameExists, inboxItemsForJob, getInboxItem, markInboxFetched, addChat, listChat, newId, type JobKind,
@@ -60,7 +60,7 @@ api.get("/home", requireUser, async (c) => {
   return c.json({
     counts, monthlySubscriptions: Math.round(monthly), activeSubscriptions: subs.length,
     books: byStatus(books), media: byStatus(media), projects, recent, jobs: listJobs(8),
-    lint: await timed(c, "lint", cachedLint), head: head(), unpushed: pushState.unpushed, pushError: pushState.error,
+    lint: await timed(c, "lint", cachedLint), head: head(), unpushed: unsavedCount(), pushError: pushState.error,
   });
 });
 
@@ -154,7 +154,7 @@ api.patch("/notes/*", requireUser, async (c) => {
   const errors = reg.validate(fm).filter((e) => !errorsBefore.has(e));
   if (errors.length) { writeFileSync(abs, before); return c.json({ error: "invalid", errors }, 422); }
   const p = c.get("principal");
-  const commit = await timed(c, "commit", () => commitKb([rel], `web: update ${rel}\n\nby ${p.kind === "user" ? p.email : p.name}`).catch((e) => ({ error: String(e) })));
+  const commit = await timed(c, "index", () => commitKb([rel], `web: update ${rel}\n\nby ${p.kind === "user" ? p.email : p.name}`));
   return c.json({ ...noteDetail(rel), fm, commit });
 });
 
@@ -162,7 +162,7 @@ api.post("/notes", requireUser, async (c) => {
   const body = (await c.req.json()) as { type: string; title: string; set?: Record<string, unknown>; force?: boolean };
   try {
     const rel = createNote(cfg, reg, db, { type: body.type, title: body.title, set: body.set, force: body.force });
-    const commit = await timed(c, "commit", () => commitKb([rel.replace(/\/README\.md$/, "")], `web: new ${body.type} ${body.title}`).catch((e) => ({ error: String(e) })));
+    const commit = await timed(c, "index", () => commitKb([rel.replace(/\/README\.md$/, "")], `web: new ${body.type} ${body.title}`));
     return c.json({ path: rel, commit });
   } catch (e) {
     if (e instanceof DuplicateError) return c.json({ error: "duplicate", matches: e.matches }, 409);
@@ -209,7 +209,7 @@ api.post("/suggestions/react", requireUser, async (c) => {
   if (reaction === "read" && title && type) {
     try { created = createNote(cfg, reg, db, { type, title, set: { status: "want", summary: "おすすめから追加" } }); paths.push(created); } catch {}
   }
-  const commit = await timed(c, "commit", () => commitKb(paths, `web: suggestion ${id} ${reaction}`).catch((e) => ({ error: String(e) })));
+  const commit = await timed(c, "index", () => commitKb(paths, `web: suggestion ${id} ${reaction}`));
   return c.json({ ok: true, created, commit });
 });
 
@@ -278,7 +278,7 @@ api.post("/chat", requireUser, async (c) => {
 api.post("/sync", requireUser, async (c) => c.json(await sync("manual")));
 api.post("/build", requireUser, async (c) => {
   const files = await timed(c, "build", rebuildGold);
-  const commit = await timed(c, "commit", () => commitKb([LAYOUT.gold], "web: kb build").catch((e) => ({ error: String(e) })));
+  const commit = await timed(c, "index", () => commitKb([LAYOUT.gold], "web: kb build"));
   return c.json({ files, commit });
 });
 

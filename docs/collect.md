@@ -35,8 +35,8 @@ LinkedIn は自分のつながりやメッセージを返す API が EU/EEA 以�
 
 1. `cp apps/collector/.env.example apps/collector/.env` して `KB_ROOT` を書く。
 2. GitHub: fine-grained PAT（対象リポジトリに Metadata / Contents / Issues / Pull requests の Read）を `GITHUB_TOKEN` に。
-3. Google: GCP で Gmail API・Google Calendar API・YouTube Data API v3・Google Health API を有効化し、OAuth クライアント（種類「デスクトップ アプリ」）を作って `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` に。同意画面は「本番環境」に公開する（テストのままだとリフレッシュトークンが 7 日で切れる）。
-4. `bun run collect auth google`：ブラウザで同意 → `GOOGLE_REFRESH_TOKEN` が `.env` に書き込まれる（画面には出ない）。続けて `bun run collect auth google-health` で Health 用の `GOOGLE_HEALTH_REFRESH_TOKEN` を取る（同じクライアントで、Health のスコープだけに同意する）。
+3. Google: GCP で Gmail API・Google Calendar API・YouTube Data API v3・Google Health API を有効化し、OAuth クライアント（種類「デスクトップ アプリ」）を作って `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` に。同意画面は「テスト」のまま運用している（下の「トークンの更新」）。
+4. `bun run collect auth`：ブラウザで 2 回同意する（Gmail・Calendar・YouTube 用と、Health のスコープだけの Health 用）。`GOOGLE_REFRESH_TOKEN` / `GOOGLE_HEALTH_REFRESH_TOKEN` と発行日時が `.env` に書き込まれる（トークンは画面に出ない）。
 5. `bun run collect status` で各ソースが `configured` になったか確認し、`bun run collect --dry-run` で件数だけ見る。
 6. データリポジトリの `900_system/scripts/launchd.sh` を再実行して `daily-collect` を入れる。
 7. Gmail を切り替える：`900_system/gas/emailfilter/README.md` の「pushToInbox からの切り替え」。
@@ -49,6 +49,16 @@ LinkedIn は自分のつながりやメッセージを返す API が EU/EEA 以�
 - 同じ期間のファイルが inbox に残っている間は上書きしない（ingest 前の二重実行は無害）。Bronze 側も同じ内容なら同じ ID になる。
 - ログ：`my-knowledge/900_system/logs/collect.log`。失敗したソースは `bun run collect status` の `last error` に出る。
 - 401 / 403（権限）が続くとき：Google はトークン失効か同意画面がテストのまま → `bun run collect auth google` をやり直す。
+
+## トークンの更新（同意画面が「テスト」の間）
+
+Google は「テスト」状態のアプリのリフレッシュトークンを、同意から 7 日で失効させる（使っていても延長されない。プログラムからは更新できない）。
+
+- 毎朝の実行（launchd）が、期限の 1.5 日前を切ったときと失効したときに macOS の通知を出す。ログ `collect.log` にも `WARN` が出る。
+- 通知が来たら `bun run collect auth`（2 つとも）か `bun run collect auth google` / `auth google-health`（片方）。同意し直した時点から 7 日に延びる。
+- `bun run collect status` の末尾に各トークンの発行日時・期限・残り日数が出る。
+- 失効したまま実行すると、そのトークンを使うソースだけが `… expired or revoked (invalid_grant): run bun run collect auth …` で失敗し、他のソースは続行する。期間は前回の位置から取り直すので、取りこぼしは出ない（Gmail は未取得ラベル基準）。
+- 同意画面を「本番環境」に公開できたら `GOOGLE_TOKEN_TTL_DAYS=0` にして警告を止める。
 
 ## ソースを足す
 

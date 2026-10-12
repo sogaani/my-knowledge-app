@@ -382,3 +382,24 @@ describe("calendar upcoming", () => {
     expect(r.meta).toMatchObject({ horizon: "2028-10-11T21:30:00.000Z", past: 1, upcoming_changes: 1, upcoming_total: 1 });
   });
 });
+
+describe("google token lifetime", () => {
+  const { tokenExpiry, isExpiredTokenError, createGoogleAuth } = require("./google") as typeof import("./google");
+  const issued = "2026-10-12T08:00:00.000Z";
+
+  test("Testing consent screen: 7 days from consent; TTL 0 means no expiry; unknown issue date tracks nothing", () => {
+    const e = tokenExpiry({ GOOGLE_REFRESH_TOKEN_ISSUED_AT: issued }, "GOOGLE_REFRESH_TOKEN", new Date("2026-10-18T08:00:00Z"));
+    expect(e.expiresAt!.toISOString()).toBe("2026-10-19T08:00:00.000Z");
+    expect(e.daysLeft).toBe(1);
+    expect(tokenExpiry({ GOOGLE_REFRESH_TOKEN_ISSUED_AT: issued, GOOGLE_TOKEN_TTL_DAYS: "0" }, "GOOGLE_REFRESH_TOKEN").expiresAt).toBeUndefined();
+    expect(tokenExpiry({}, "GOOGLE_REFRESH_TOKEN")).toEqual({ issuedAt: undefined });
+  });
+
+  test("invalid_grant from the token endpoint becomes an actionable error", async () => {
+    expect(isExpiredTokenError('{"error":"invalid_grant","error_description":"Token has been expired or revoked."}')).toBe(true);
+    expect(isExpiredTokenError("HTTP 403 quota")).toBe(false);
+    const http = createHttp({ fetchImpl: (async () => new Response('{"error":"invalid_grant","error_description":"Token has been expired or revoked."}', { status: 400 })) as unknown as typeof fetch, sleep: async () => {} });
+    const auth = createGoogleAuth({ GOOGLE_CLIENT_ID: "c", GOOGLE_CLIENT_SECRET: "s", GOOGLE_HEALTH_REFRESH_TOKEN: "r" }, http, { refreshTokenVar: "GOOGLE_HEALTH_REFRESH_TOKEN", authCommand: "auth google-health" });
+    await expect(auth.accessToken()).rejects.toThrow("GOOGLE_HEALTH_REFRESH_TOKEN expired or revoked (invalid_grant): run bun run collect auth google-health");
+  });
+});

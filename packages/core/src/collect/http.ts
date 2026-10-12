@@ -27,8 +27,15 @@ export function redactUrl(url: string): string {
   return url.replace(/\?.*$/, "?…");
 }
 
-/** Whether a failed response is worth retrying, and how long the server asked us to wait (ms), if it said. */
-export function retryDecision(res: Pick<Response, "status" | "headers">, now = Date.now()): { retry: boolean; waitMs?: number } {
+/** Google APIs report quota / rate limits as 403 with these reasons in the body (no Retry-After). */
+const GOOGLE_RATE_LIMIT = /rateLimitExceeded|userRateLimitExceeded|RATE_LIMIT_EXCEEDED|RESOURCE_EXHAUSTED/;
+const PER_MINUTE_QUOTA = /per minute|PerMinute/i;
+
+/**
+ * Whether a failed response is worth retrying, and how long the server asked us to wait (ms), if it said.
+ * `body` (when read) lets a 403 rate limit (Google) be told apart from a real permission error.
+ */
+export function retryDecision(res: Pick<Response, "status" | "headers">, now = Date.now(), body = ""): { retry: boolean; waitMs?: number } {
   const h = res.headers;
   const retryAfter = h.get("retry-after");
   let waitMs: number | undefined;
@@ -43,6 +50,8 @@ export function retryDecision(res: Pick<Response, "status" | "headers">, now = D
   if (rateLimited && waitMs === undefined) waitMs = Math.max(0, Number(reset) * 1000 - now) + 1000;
   if (res.status === 429 || res.status >= 500) return { retry: true, waitMs };
   if (res.status === 403 && (rateLimited || retryAfter)) return { retry: true, waitMs };
+  // per-minute quotas refill within a minute: wait the window out instead of hammering with short backoffs
+  if (res.status === 403 && GOOGLE_RATE_LIMIT.test(body)) return { retry: true, waitMs: waitMs ?? (PER_MINUTE_QUOTA.test(body) ? 61_000 : undefined) };
   return { retry: false };
 }
 
@@ -65,15 +74,16 @@ export function createHttp(opts: { policy?: Partial<RetryPolicy>; sleep?: Sleep;
         err = e; // network error / timeout: retryable
       }
       if (res?.ok) return res;
-      const d = res ? retryDecision(res) : { retry: true as const, waitMs: undefined };
+      const body = res && res.status === 403 ? await res.text().catch(() => "") : undefined;
+      const d = res ? retryDecision(res, Date.now(), body) : { retry: true as const, waitMs: undefined };
       if (!d.retry || attempt >= p.retries) {
-        if (res) throw new HttpError(res.status, url, await res.text().catch(() => ""));
+        if (res) throw new HttpError(res.status, url, body ?? (await res.text().catch(() => "")));
         throw err;
       }
       // a server-provided wait longer than maxMs is still honoured (GitHub resets can be ~minutes away)
       const wait = d.waitMs ?? backoffMs(attempt, p);
       opts.onRetry?.(`${res ? `HTTP ${res.status}` : String((err as Error)?.message ?? err)} ${redactUrl(url)} → retry ${attempt + 1}/${p.retries} in ${Math.round(wait / 1000)}s`);
-      await res?.body?.cancel().catch(() => {});
+      if (body === undefined) await res?.body?.cancel().catch(() => {});
       await sleep(wait);
     }
   }
@@ -81,7 +91,9 @@ export function createHttp(opts: { policy?: Partial<RetryPolicy>; sleep?: Sleep;
   return {
     fetch: fetchRetry,
     async json<T>(url: string, init?: RequestInit): Promise<T> {
-      return (await (await fetchRetry(url, init)).json()) as T;
+      // some endpoints answer 200/204 with no body (Gmail messages.batchModify)
+      const text = await (await fetchRetry(url, init)).text();
+      return (text ? JSON.parse(text) : undefined) as T;
     },
   };
 }

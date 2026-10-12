@@ -3,12 +3,12 @@
  * Bronze collectors (Mac): pull GitHub / Gmail / Calendar / YouTube / Google Health / LinkedIn export into 000_inbox.
  *   bun run collect [source...] [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--dry-run]
  *   bun run collect status
- *   bun run collect auth google
+ *   bun run collect auth google | auth google-health
  * Logic lives in @kb/core (collect/); this is the entry point that owns the .env with the secrets.
  */
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { COLLECTORS, authorizeGoogle, loadConfig, loadState, runCollectors } from "@kb/core";
+import { COLLECTORS, GOOGLE_HEALTH_SCOPES, GOOGLE_SCOPES, authorizeGoogle, loadConfig, loadState, runCollectors } from "@kb/core";
 
 const ENV_FILE = join(import.meta.dir, "..", ".env");
 const args = process.argv.slice(2);
@@ -33,10 +33,13 @@ const parseDate = (s: string | undefined) => {
 
 async function main() {
   if (args[0] === "auth") {
-    if (args[1] !== "google") throw new Error("usage: bun run collect auth google");
+    // Gmail / Calendar / YouTube share one token; the Health API needs a token with health scopes only
+    const target = { google: { scopes: GOOGLE_SCOPES, envVar: "GOOGLE_REFRESH_TOKEN" }, "google-health": { scopes: GOOGLE_HEALTH_SCOPES, envVar: "GOOGLE_HEALTH_REFRESH_TOKEN" } }[args[1] ?? ""];
+    if (!target) throw new Error("usage: bun run collect auth google | auth google-health");
     console.log("ブラウザで Google の同意画面を開きます（127.0.0.1:8789 で受け取ります）…");
-    const { scopes } = await authorizeGoogle(process.env).then((r) => { setEnvVar("GOOGLE_REFRESH_TOKEN", r.refreshToken); return r; });
-    console.log(`GOOGLE_REFRESH_TOKEN を ${ENV_FILE} に書き込みました。許可されたスコープ:\n  ${scopes.split(" ").join("\n  ")}`);
+    const { refreshToken, scopes } = await authorizeGoogle(process.env, { scopes: target.scopes });
+    setEnvVar(target.envVar, refreshToken);
+    console.log(`${target.envVar} を ${ENV_FILE} に書き込みました。許可されたスコープ:\n  ${scopes.split(" ").join("\n  ")}`);
     return;
   }
 

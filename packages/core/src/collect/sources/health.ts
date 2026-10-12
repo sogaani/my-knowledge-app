@@ -3,7 +3,7 @@
  * sessions (dataPoints list, filtered by wake-up date). Only complete days are collected: [cursor day, today).
  * One item per day; the raw API objects are kept so `kb health import` can recompute anything later.
  */
-import { googleJson } from "../google";
+import { createGoogleAuth, googleJson } from "../google";
 import type { Collector } from "../types";
 import { startOfDay, ymd } from "../dates";
 
@@ -25,8 +25,10 @@ export const health: Collector = {
   id: "health",
   label: "Google Health",
   lookbackDays: 7,
-  configured: (env) => (env.GOOGLE_REFRESH_TOKEN ? (env.GOOGLE_HEALTH === "off" ? "GOOGLE_HEALTH=off" : true) : "missing GOOGLE_REFRESH_TOKEN (run: bun run collect auth google)"),
-  async collect({ http, google, from, to }) {
+  configured: (env) => (env.GOOGLE_HEALTH === "off" ? "GOOGLE_HEALTH=off" : env.GOOGLE_HEALTH_REFRESH_TOKEN ? true : "missing GOOGLE_HEALTH_REFRESH_TOKEN (run: bun run collect auth google-health)"),
+  async collect({ env, http, from, to }) {
+    // its own token: the Health API refuses tokens that also carry Gmail / Calendar / YouTube scopes
+    const google = createGoogleAuth(env, http, { refreshTokenVar: "GOOGLE_HEALTH_REFRESH_TOKEN", authCommand: "auth google-health" });
     const start = startOfDay(from);
     const end = startOfDay(to); // exclusive: today is not complete yet
     if (end <= start) return { from: start, to: end };

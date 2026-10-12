@@ -37,13 +37,15 @@ export const github: Collector = {
     const token = env.GITHUB_TOKEN!;
     const login = env.GITHUB_LOGIN || (await http.json<{ login: string }>(`${API}/user`, { headers: headers(token) })).login;
     const range = `${isoDate(from)}..${isoDate(to)}`;
-    const [issues, commits] = await Promise.all([
-      search<IssueItem>(http, token, "issues", `author:${login} created:${range}`),
+    // the issues endpoint requires is:issue or is:pull-request in the query
+    const [issues, prs, commits] = await Promise.all([
+      search<IssueItem>(http, token, "issues", `is:issue author:${login} created:${range}`),
+      search<IssueItem>(http, token, "issues", `is:pull-request author:${login} created:${range}`),
       search<CommitItem>(http, token, "commits", `author:${login} committer-date:${range}`),
     ]);
     const repoOf = (url: string) => url.replace(`${API}/repos/`, "");
     const items: Item[] = [
-      ...issues.map((raw) => ({ kind: raw.pull_request ? ("pr" as const) : ("issue" as const), repo: repoOf(raw.repository_url), raw })),
+      ...[...issues, ...prs].map((raw) => ({ kind: raw.pull_request ? ("pr" as const) : ("issue" as const), repo: repoOf(raw.repository_url), raw })),
       ...commits.map((raw) => ({ kind: "commit" as const, repo: raw.repository.full_name, raw })),
     ];
     return { items, meta: { login } };

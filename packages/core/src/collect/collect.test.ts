@@ -32,6 +32,19 @@ describe("retryDecision", () => {
     expect(d.waitMs).toBe(61_000);
     expect(retryDecision(res(403)).retry).toBe(false); // plain permission error
   });
+  test("Google quota 403 retries (a per-minute quota waits out the minute); disallowed scopes do not", () => {
+    const quota = JSON.stringify({ error: { code: 403, message: "Quota exceeded for quota metric 'Total Query Cost' and limit 'Units per minute per user'", details: [{ reason: "RATE_LIMIT_EXCEEDED" }] } });
+    expect(retryDecision(res(403), Date.now(), quota)).toEqual({ retry: true, waitMs: 61_000 });
+    expect(retryDecision(res(403), Date.now(), '{"error":{"errors":[{"reason":"userRateLimitExceeded"}]}}').retry).toBe(true);
+    expect(retryDecision(res(403), Date.now(), '{"error":{"details":[{"reason":"DISALLOWED_OAUTH_SCOPES"}]}}').retry).toBe(false);
+  });
+  test("createHttp passes the 403 body to the decision", async () => {
+    const bodies = ['{"error":{"details":[{"reason":"RATE_LIMIT_EXCEEDED"}]}}', "{}"];
+    const waits: number[] = [];
+    const http = createHttp({ fetchImpl: (async () => { const b = bodies.shift()!; return new Response(b, { status: b === "{}" ? 200 : 403 }); }) as unknown as typeof fetch, sleep: async (ms) => { waits.push(ms); } });
+    expect(await http.json<Record<string, never>>("https://example.test/x")).toEqual({});
+    expect(waits.length).toBe(1);
+  });
 });
 
 describe("backoff", () => {
@@ -53,6 +66,10 @@ describe("backoff", () => {
     const err = await http.json("https://example.test/x?key=secret").catch((e) => e);
     expect(err).toBeInstanceOf(HttpError);
     expect((err as Error).message).not.toContain("secret");
+  });
+  test("an empty 2xx body is undefined, not a JSON error", async () => {
+    const http = createHttp({ fetchImpl: (async () => new Response(null, { status: 204 })) as unknown as typeof fetch });
+    expect(await http.json("https://example.test/batchModify")).toBeUndefined();
   });
   test("non-retryable errors fail immediately", async () => {
     let calls = 0;
@@ -265,19 +282,25 @@ describe("sources against a fake API", () => {
   test("github: search queries cover the window; PRs, issues and commits are told apart", async () => {
     const { github } = require("./sources/github") as typeof import("./sources/github");
     const { http, calls } = fakeHttp(({ url }) => {
-      if (url.includes("/search/issues")) return { items: [
-        { html_url: "", title: "Fix", number: 3, state: "closed", created_at: "2026-10-06T00:00:00Z", closed_at: null, repository_url: "https://api.github.com/repos/me/app", pull_request: {} },
-        { html_url: "", title: "Bug", number: 4, state: "open", created_at: "2026-10-07T00:00:00Z", closed_at: null, repository_url: "https://api.github.com/repos/me/app" },
-      ] };
+      if (url.includes("/search/issues")) {
+        const pr = new URL(url).searchParams.get("q")!.startsWith("is:pull-request");
+        return { items: pr
+          ? [{ html_url: "", title: "Fix", number: 3, state: "closed", created_at: "2026-10-06T00:00:00Z", closed_at: null, repository_url: "https://api.github.com/repos/me/app", pull_request: {} }]
+          : [{ html_url: "", title: "Bug", number: 4, state: "open", created_at: "2026-10-07T00:00:00Z", closed_at: null, repository_url: "https://api.github.com/repos/me/app" }] };
+      }
       if (url.includes("/search/commits")) return { items: [{ html_url: "", sha: "abcdef123", commit: { message: "feat: x\n\nbody", author: { date: "2026-10-08T00:00:00Z" } }, repository: { full_name: "me/app" } }] };
       throw new Error(`unexpected ${url}`);
     });
     const r = await github.collect({ ...ctxBase, env: { GITHUB_TOKEN: "t", GITHUB_LOGIN: "me" }, http, from: new Date("2026-10-05T00:00:00Z"), to: new Date("2026-10-12T00:00:00Z") });
     const q = calls.map((c) => new URL(c.url).searchParams.get("q"));
-    expect(q).toEqual(["author:me created:2026-10-05T00:00:00Z..2026-10-12T00:00:00Z", "author:me committer-date:2026-10-05T00:00:00Z..2026-10-12T00:00:00Z"]);
+    expect(q).toEqual([
+      "is:issue author:me created:2026-10-05T00:00:00Z..2026-10-12T00:00:00Z",
+      "is:pull-request author:me created:2026-10-05T00:00:00Z..2026-10-12T00:00:00Z",
+      "author:me committer-date:2026-10-05T00:00:00Z..2026-10-12T00:00:00Z",
+    ]);
     expect(r.items!.map((i) => github.digest(i))).toEqual([
-      "2026-10-06 pr me/app#3 [closed] Fix",
       "2026-10-07 issue me/app#4 [open] Bug",
+      "2026-10-06 pr me/app#3 [closed] Fix",
       "2026-10-08 commit me/app abcdef1 feat: x",
     ]);
   });
@@ -285,7 +308,8 @@ describe("sources against a fake API", () => {
   test("health: complete days only, ≤14-day rollup chunks, sleep on the wake-up day, empty days dropped", async () => {
     const { health } = require("./sources/health") as typeof import("./sources/health");
     const bodies: { type: string; range: { start: { date: { day: number; month: number } }; end: { date: { day: number; month: number } } } }[] = [];
-    const { http } = fakeHttp(({ url, init }) => {
+    const { http, calls } = fakeHttp(({ url, init }) => {
+      if (url === "https://oauth2.googleapis.com/token") return { access_token: "health-tok", expires_in: 3600 };
       const m = /dataTypes\/([a-z-]+)\/dataPoints(:dailyRollUp)?/.exec(url)!;
       if (m[2]) {
         const body = JSON.parse(String(init!.body));
@@ -296,7 +320,11 @@ describe("sources against a fake API", () => {
       expect(new URL(url).searchParams.get("filter")).toBe('sleep.interval.civil_end_time >= "2026-09-15" AND sleep.interval.civil_end_time < "2026-10-12"');
       return { dataPoints: [{ sleep: { interval: { startTime: "2026-09-29T14:00:00Z", endTime: "2026-09-29T21:00:00Z", civilEndTime: { date: { year: 2026, month: 9, day: 30 } } }, summary: { minutesAsleep: "400" } } }] };
     });
-    const r = await health.collect({ ...ctxBase, env: {}, http, from: new Date(2026, 8, 15, 9), to: new Date(2026, 9, 12, 6, 30) });
+    const env = { GOOGLE_CLIENT_ID: "c", GOOGLE_CLIENT_SECRET: "s", GOOGLE_HEALTH_REFRESH_TOKEN: "health-refresh", GOOGLE_REFRESH_TOKEN: "general-refresh" };
+    const r = await health.collect({ ...ctxBase, env, http, from: new Date(2026, 8, 15, 9), to: new Date(2026, 9, 12, 6, 30) });
+    // its own token (the Health API rejects tokens carrying Gmail / Calendar / YouTube scopes)
+    expect(String(calls.find((c) => c.url.includes("oauth2"))!.init!.body)).toContain("refresh_token=health-refresh");
+    expect(health.configured({ GOOGLE_REFRESH_TOKEN: "x" })).toContain("GOOGLE_HEALTH_REFRESH_TOKEN");
     expect(r.items!.map((d) => (d as { date: string }).date)).toEqual(["2026-09-20", "2026-09-30"]);
     const steps = bodies.filter((b) => b.type === "steps").map((b) => `${b.range.start.date.month}/${b.range.start.date.day}-${b.range.end.date.month}/${b.range.end.date.day}`);
     expect(steps).toEqual(["9/15-9/29", "9/29-10/12"]); // 27 days → 14 + 13

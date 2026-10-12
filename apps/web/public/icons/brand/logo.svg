@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="my-knowledge">
+  <title>my-knowledge</title>
+  <rect width="512" height="512" rx="112" fill="#1f6feb"/>
+  <!-- stem -->
+  <rect x="136" y="112" width="72" height="288" fill="#ffffff"/>
+  <!-- the K's arm as the medallion layers: gold (views) on silver (notes) on bronze (raw data) -->
+  <polygon points="216,218 384,117 384,145 216,246" fill="#f4c542"/>
+  <polygon points="216,256 384,155 384,183 216,284" fill="#e3e8ef"/>
+  <polygon points="216,294 384,193 384,221 216,322" fill="#d08c4f"/>
+  <!-- leg -->
+  <polygon points="216,336 276,300 376,400 280,400" fill="#ffffff"/>
+</svg>

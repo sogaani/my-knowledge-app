@@ -7,6 +7,12 @@ export const GOOGLE_SCOPES = [
   "https://www.googleapis.com/auth/gmail.modify", // read KB/* mail, add the KB/取込済 label
   "https://www.googleapis.com/auth/calendar.readonly",
   "https://www.googleapis.com/auth/youtube.readonly",
+];
+/**
+ * The Google Health API rejects any token that also carries non-health scopes (403 DISALLOWED_OAUTH_SCOPES),
+ * so it gets its own consent and refresh token (same OAuth client): `bun run collect auth google-health`.
+ */
+export const GOOGLE_HEALTH_SCOPES = [
   "https://www.googleapis.com/auth/googlehealth.activity_and_fitness.readonly",
   "https://www.googleapis.com/auth/googlehealth.sleep.readonly",
 ];
@@ -19,12 +25,13 @@ export interface GoogleAuth {
   accessToken(): Promise<string>;
 }
 
-export function createGoogleAuth(env: Env, http: HttpClient): GoogleAuth {
-  const missing = ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_REFRESH_TOKEN"].filter((k) => !env[k]);
+export function createGoogleAuth(env: Env, http: HttpClient, opts: { refreshTokenVar?: string; authCommand?: string } = {}): GoogleAuth {
+  const tokenVar = opts.refreshTokenVar ?? "GOOGLE_REFRESH_TOKEN";
+  const missing = ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", tokenVar].filter((k) => !env[k]);
   let cached: { token: string; exp: number } | null = null;
   let inflight: Promise<string> | null = null;
   return {
-    configured: missing.length ? `missing ${missing.join(", ")} (run: bun run collect auth google)` : true,
+    configured: missing.length ? `missing ${missing.join(", ")} (run: bun run collect ${opts.authCommand ?? "auth google"})` : true,
     async accessToken() {
       if (missing.length) throw new Error(`Google auth not configured: missing ${missing.join(", ")}`);
       if (cached && cached.exp > Date.now() + 60_000) return cached.token;
@@ -36,7 +43,7 @@ export function createGoogleAuth(env: Env, http: HttpClient): GoogleAuth {
             headers: { "content-type": "application/x-www-form-urlencoded" },
             body: new URLSearchParams({
               client_id: env.GOOGLE_CLIENT_ID!, client_secret: env.GOOGLE_CLIENT_SECRET!,
-              refresh_token: env.GOOGLE_REFRESH_TOKEN!, grant_type: "refresh_token",
+              refresh_token: env[tokenVar]!, grant_type: "refresh_token",
             }),
           });
           cached = { token: r.access_token, exp: Date.now() + r.expires_in * 1000 };
@@ -60,14 +67,14 @@ export async function googleJson<T>(http: HttpClient, auth: GoogleAuth, url: str
  * Interactive consent (run by hand once): loopback redirect on 127.0.0.1 with PKCE, returns the refresh token.
  * The caller writes it into the collector's .env; it is never printed.
  */
-export async function authorizeGoogle(env: Env, opts: { port?: number; open?: (url: string) => void } = {}): Promise<{ refreshToken: string; scopes: string }> {
+export async function authorizeGoogle(env: Env, opts: { port?: number; open?: (url: string) => void; scopes?: string[] } = {}): Promise<{ refreshToken: string; scopes: string }> {
   if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET) throw new Error("set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in apps/collector/.env first");
   const port = opts.port ?? 8789;
   const redirect = `http://127.0.0.1:${port}/callback`;
   const verifier = randomBytes(32).toString("base64url");
   const state = randomBytes(16).toString("hex");
   const url = `${AUTH_URL}?${new URLSearchParams({
-    client_id: env.GOOGLE_CLIENT_ID, redirect_uri: redirect, response_type: "code", scope: GOOGLE_SCOPES.join(" "),
+    client_id: env.GOOGLE_CLIENT_ID, redirect_uri: redirect, response_type: "code", scope: (opts.scopes ?? GOOGLE_SCOPES).join(" "),
     access_type: "offline", prompt: "consent", state,
     code_challenge: createHash("sha256").update(verifier).digest("base64url"), code_challenge_method: "S256",
   })}`;

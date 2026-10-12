@@ -55,7 +55,7 @@ function placesApi(names: Record<string, [string, string] | 404>, opts: { status
     const id = decodeURIComponent(new URL(url).pathname.split("/").pop()!);
     const v = names[id];
     if (v === 404 || !v) return new Response('{"error":{"code":404,"status":"NOT_FOUND"}}', { status: 404 });
-    return new Response(JSON.stringify({ id, displayName: { text: v[0], languageCode: "ja" }, primaryType: v[1] }));
+    return new Response(JSON.stringify({ id, displayName: { text: v[0], languageCode: "ja" }, primaryType: v[1], googleMapsUri: `https://maps.google.com/?cid=${id}` }));
   }) as unknown as typeof fetch;
   const waits: number[] = [];
   return { http: createHttp({ fetchImpl, sleep: async (ms) => { waits.push(ms); } }), calls, waits };
@@ -64,9 +64,9 @@ function placesApi(names: Record<string, [string, string] | 404>, opts: { status
 describe("places", () => {
   test("fetch: field mask + key header; 404 is not_found; a bad key throws", async () => {
     const { http, calls } = placesApi({ P1: ["ジム", "gym"] });
-    expect(await fetchPlace(http, "KEY", "P1")).toEqual({ placeId: "P1", name: "ジム", primaryType: "gym", status: "ok" });
+    expect(await fetchPlace(http, "KEY", "P1")).toEqual({ placeId: "P1", name: "ジム", primaryType: "gym", mapsUri: "https://maps.google.com/?cid=P1", status: "ok" });
     const h = new Headers(calls[0]!.init!.headers);
-    expect(h.get("X-Goog-FieldMask")).toBe("id,displayName,primaryType");
+    expect(h.get("X-Goog-FieldMask")).toBe("id,displayName,primaryType,googleMapsUri");
     expect(h.get("X-Goog-Api-Key")).toBe("KEY");
     expect(calls[0]!.url).toContain("languageCode=ja");
     expect((await fetchPlace(http, "KEY", "gone")).status).toBe("not_found");
@@ -86,6 +86,21 @@ describe("places", () => {
     const r3 = await lookupPlaces(["P1"], { http: a.http, apiKey: "K", cache, maxLookups: 10, now: t0 + 31 * day });
     expect(r3.fetched).toBe(1);
     expect(new PlacesCache(":memory:", 365).ttlMs).toBe(30 * day); // TTL is capped at 30 days
+  });
+
+  test("a cache written before googleMapsUri existed is migrated, and its rows are refetched", async () => {
+    const { Database } = require("bun:sqlite") as typeof import("bun:sqlite");
+    const path = join(mkdtempSync(join(tmpdir(), "kb-places-")), "places.sqlite");
+    const old = new Database(path);
+    old.run("CREATE TABLE places (place_id TEXT PRIMARY KEY, display_name TEXT, primary_type TEXT, status TEXT NOT NULL, fetched_at INTEGER NOT NULL)");
+    old.run("INSERT INTO places VALUES ('P1', 'ジム', 'gym', 'ok', ?)", [Date.now()]);
+    old.close();
+    const cache = new PlacesCache(path);
+    expect(cache.get("P1")).toBeUndefined();
+    const a = placesApi({ P1: ["ジム", "gym"] });
+    const r = await lookupPlaces(["P1"], { http: a.http, apiKey: "K", cache, maxLookups: 5 });
+    expect([r.fetched, r.places.get("P1")!.mapsUri]).toEqual([1, "https://maps.google.com/?cid=P1"]);
+    expect(cache.get("P1")!.mapsUri).toBe("https://maps.google.com/?cid=P1");
   });
 
   test("maxLookups defers the rest; 429 is retried after Retry-After", async () => {
@@ -149,7 +164,7 @@ describe("importLocation", () => {
     const r2 = await importLocation(cfg, reg, db, bronze.id, opts);
     expect([r2.fetched, r2.cached, r2.deferred]).toEqual([1, 1, 0]);
     const { fm, body } = parseNote(readFileSync(oct, "utf8"));
-    expect(body).toContain("| 2026-10-01 | 13:00–15:00 | 国立西洋美術館 | art_museum | 2h00m |");
+    expect(body).toContain("| 2026-10-01 | 13:00–15:00 | [国立西洋美術館](https://maps.google.com/?cid=P_museum) | art_museum | 2h00m |");
     expect(body).not.toContain("（未取得）");
     expect(body).toContain("- 企画展を見た");
     expect(body.match(/kb:location:start/g)?.length).toBe(1);
@@ -157,7 +172,7 @@ describe("importLocation", () => {
     expect(r2.notable.map((n) => n.place!.name)).toEqual(["ボルダリングジム X", "国立西洋美術館"]);
     expect(readMeta(cfg, bronze.id)!.processed_to.sort()).toEqual(r1.months.map((m) => m.path).sort());
     // coordinates never come from the API
-    expect(api.calls.every((c) => new Headers(c.init!.headers).get("X-Goog-FieldMask") === "id,displayName,primaryType")).toBe(true);
+    expect(api.calls.every((c) => new Headers(c.init!.headers).get("X-Goog-FieldMask") === "id,displayName,primaryType,googleMapsUri")).toBe(true);
   });
 
   test("a JSON that is not a Timeline export and a missing key are clear errors", async () => {

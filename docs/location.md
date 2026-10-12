@@ -8,7 +8,7 @@
        └─ ingest スキル: kb ingest → Bronze（kind file、生 JSON のまま）
             └─ kb location import <bronze-id>         packages/core/src/location/
                  ├─ parse.ts   Android(semanticSegments) / iOS(配列, placeID)（旧 Takeout の Semantic Location History は対象外）
-                 ├─ places.ts  Places API (New) Place Details: displayName, primaryType だけ（field mask）
+                 ├─ places.ts  Places API (New) Place Details: displayName, primaryType, googleMapsUri だけ（field mask。同じ料金区分）
                  │             900_system/cache/places.sqlite に最長 30 日キャッシュ、期限切れは毎回削除
                  │             HTTP は collect/http.ts（429・5xx は指数バックオフ + Retry-After）
                  └─ import.ts  200_silver/211_location/YYYY-MM.md（location_log、git-crypt）を作成・更新

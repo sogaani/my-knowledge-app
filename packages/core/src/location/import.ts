@@ -39,6 +39,9 @@ const duration = (a: string, b: string) => {
   return m >= 60 ? `${Math.floor(m / 60)}h${String(m % 60).padStart(2, "0")}m` : `${m}m`;
 };
 const cell = (s: string) => s.replace(/\|/g, "\\|").replace(/\n/g, " ");
+/** Place name as a Markdown link to Google Maps when the API gave one. */
+const placeCell = (label: string, uri: string | null | undefined) =>
+  uri && /^https:\/\//.test(uri) ? `[${cell(label).replace(/[[\]]/g, "\\$&")}](${uri.replace(/[()|\s]/g, encodeURIComponent)})` : cell(label);
 
 /** The Timeline JSON file of a Bronze item, or null when it has none. */
 function timelineFile(cfg: KbConfig, meta: BronzeMeta): string | null {
@@ -97,7 +100,7 @@ export function renderLocationTable(rows: LocationRow[]): string {
     "|---|---|---|---|---|",
     ...rows.map(({ visit: v, place: p }) => {
       const sameDay = localDate(v.start) === localDate(v.end);
-      return `| ${localDate(v.start)} | ${hhmm(v.start)}–${sameDay ? "" : `${localDate(v.end).slice(5)} `}${hhmm(v.end)} | ${cell(name({ visit: v, place: p }))} | ${p?.primaryType ?? v.semanticType?.toLowerCase().replace(/^type_/, "") ?? ""} | ${duration(v.start, v.end)} |`;
+      return `| ${localDate(v.start)} | ${hhmm(v.start)}–${sameDay ? "" : `${localDate(v.end).slice(5)} `}${hhmm(v.end)} | ${placeCell(name({ visit: v, place: p }), p?.mapsUri)} | ${p?.primaryType ?? v.semanticType?.toLowerCase().replace(/^type_/, "") ?? ""} | ${duration(v.start, v.end)} |`;
     }),
     END,
   ].join("\n");

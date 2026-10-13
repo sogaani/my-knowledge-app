@@ -117,8 +117,9 @@ export function buildGold(cfg: KbConfig, db: Database): string[] {
     const upcoming = ev.filter((e) => e.days >= -7 && e.days <= 42).sort((a, b) => a.date.localeCompare(b.date));
     const codeOf = (n: QueryResult) => String(n.fm.code ?? "");
     const byStatus = group(stocks, (n) => n.status);
+    const themesOf = stockThemes(stocks, themes);
     const stockRows = (xs: QueryResult[]) => xs.sort((a, b) => codeOf(a).localeCompare(codeOf(b))).map((n) =>
-      `| ${codeOf(n)} | ${link(n)} | ${n.fm.market ?? ""} | ${n.fm.sector ?? ""} | ${n.fm.next_earnings ?? ""} | ${n.fm.thesis ?? n.summary} |`);
+      `| ${codeOf(n)} | ${link(n)} | ${n.fm.market ?? ""} | ${n.fm.sector ?? ""} | ${(themesOf.get(n.path) ?? []).map((t) => link(t)).join("、")} | ${n.fm.next_earnings ?? ""} | ${n.fm.thesis ?? n.summary} |`);
     out(GOLD.market, [
       "# 市場メモ", "",
       "銘柄ノート（`stock`）とテーマノート（`theme`）の入口。`market-scan` が週次で更新し、`trade-plan` が毎朝読む。", "",
@@ -126,11 +127,11 @@ export function buildGold(cfg: KbConfig, db: Database): string[] {
       "| 日付 | あと | 銘柄 / テーマ | 内容 |", "|---|---|---|---|",
       ...(upcoming.length ? upcoming.map((e) => `| ${e.date} | ${e.days < 0 ? `${-e.days} 日前` : e.days === 0 ? "今日" : `${e.days} 日`} | ${e.who} | ${e.label} |`) : ["| | | （なし） | |"]),
       "", "## 保有銘柄", "",
-      "| コード | 銘柄 | 市場 | セクター | 次回決算 | 論拠 |", "|---|---|---|---|---|---|",
-      ...(stockRows(byStatus.holding ?? []).length ? stockRows(byStatus.holding ?? []) : ["| | （なし） | | | | |"]),
+      "| コード | 銘柄 | 市場 | セクター | テーマ | 次回決算 | 論拠 |", "|---|---|---|---|---|---|---|",
+      ...(stockRows(byStatus.holding ?? []).length ? stockRows(byStatus.holding ?? []) : ["| | （なし） | | | | | |"]),
       "", "## 監視銘柄", "",
-      "| コード | 銘柄 | 市場 | セクター | 次回決算 | 論拠 |", "|---|---|---|---|---|---|",
-      ...(stockRows(byStatus.watch ?? []).length ? stockRows(byStatus.watch ?? []) : ["| | （なし） | | | | |"]),
+      "| コード | 銘柄 | 市場 | セクター | テーマ | 次回決算 | 論拠 |", "|---|---|---|---|---|---|---|",
+      ...(stockRows(byStatus.watch ?? []).length ? stockRows(byStatus.watch ?? []) : ["| | （なし） | | | | | |"]),
       "", "## テーマ", "",
       "| テーマ | 段階 | 状態 | 関連銘柄 | 要約 |", "|---|---|---|---|---|",
       ...(themes.length ? themes.map((n) => `| ${link(n)} | ${n.fm.stage ?? ""} | ${n.status} | ${(Array.isArray(n.fm.tickers) ? n.fm.tickers : []).join(", ")} | ${n.summary} |`) : ["| （なし） | | | | |"]),
@@ -227,6 +228,24 @@ export function buildGold(cfg: KbConfig, db: Database): string[] {
     }
   }
   return written;
+}
+
+/**
+ * Stock → theme notes, derived from the theme side: a theme lists its stocks in `tickers` (the only place the link is
+ * maintained), so a stock belongs to every theme whose tickers contain its code. A stock's own `themes` (theme titles)
+ * still counts, for a link no theme note carries. Silver is never rewritten: Gold shows the result.
+ */
+export function stockThemes(stocks: QueryResult[], themes: QueryResult[]): Map<string, QueryResult[]> {
+  const byTitle = new Map(themes.map((t) => [t.title, t]));
+  const byCode = new Map<string, QueryResult[]>();
+  for (const t of themes) for (const c of (Array.isArray(t.fm.tickers) ? t.fm.tickers : []).map(String)) byCode.set(c, [...(byCode.get(c) ?? []), t]);
+  const out = new Map<string, QueryResult[]>();
+  for (const s of stocks) {
+    const own = (Array.isArray(s.fm.themes) ? s.fm.themes : []).map((x) => byTitle.get(String(x))).filter((t): t is QueryResult => !!t);
+    const all = [...new Set([...(byCode.get(String(s.fm.code ?? "")) ?? []), ...own])].sort((a, b) => a.title.localeCompare(b.title, "ja"));
+    if (all.length) out.set(s.path, all);
+  }
+  return out;
 }
 
 /** Inline a Silver note body into Gold: drop its H1 and rebase relative .md links from the note's folder to 300_gold/. */

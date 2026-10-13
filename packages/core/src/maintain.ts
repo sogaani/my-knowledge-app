@@ -113,6 +113,10 @@ function relPosix(fromDir: string, to: string): string {
 
 export interface LintReport {
   inboxStale: string[]; orphans: string[]; stale: string[]; renewals: string[]; archiveCandidates: string[]; unprocessedBronze: string[];
+  /** Tags used by exactly one note (`tag (path)`): not a cross-cutting topic, so fold into a field or drop. */
+  singleUseTags: string[];
+  /** Tags that repeat a dedicated field of the same note (`path: tag (= genre)`): genre / subgenre / platform / kind own that information. */
+  redundantTags: string[];
   /** Bronze items per kind (and per Gmail category for mail) by processing state: how much of what comes in ends up in Silver. */
   bronze: BronzeSummary[];
 }
@@ -126,17 +130,29 @@ export function lint(cfg: KbConfig, db: Database, opts: { staleDays?: number } =
   const rows = db.query("SELECT path, type, status, updated, fm FROM notes WHERE archived=0 AND path LIKE ?").all(`${SILVER_PREFIX}%`) as
     { path: string; type: string; status: string; updated: string; fm: string }[];
   const orphans: string[] = [], stale: string[] = [], renewals: string[] = [], archiveCandidates: string[] = [];
+  const tagUses = new Map<string, string[]>();
+  const redundantTags: string[] = [];
   for (const r of rows) {
     const fm = JSON.parse(r.fm) as Record<string, unknown>;
+    for (const t of tagsOf(fm)) {
+      tagUses.set(t, [...(tagUses.get(t) ?? []), r.path]);
+      const field = TAG_FIELDS.find((f) => typeof fm[f] === "string" && String(fm[f]).toLowerCase() === t.toLowerCase());
+      if (field) redundantTags.push(`${r.path}: ${t} (= ${field})`);
+    }
     if (!linked.has(r.path) && !["review", "trade_plan"].includes(r.type)) orphans.push(r.path);
     if (["project", "learning"].includes(r.type) && r.status === "active" && r.updated && days(r.updated) > (opts.staleDays ?? 30)) stale.push(r.path);
     if (r.type === "subscription" && r.status === "active" && fm.next_renewal && days(String(fm.next_renewal)) > -14) renewals.push(`${r.path} (${fm.next_renewal})`);
     if (["done", "cancelled", "closed"].includes(r.status)) archiveCandidates.push(r.path);
   }
+  const singleUseTags = [...tagUses].filter(([, ps]) => ps.length === 1).map(([t, ps]) => `${t} (${ps[0]})`).sort();
   const metas = [...walkBronze(cfg)];
   const unprocessedBronze = metas.filter((m) => processState(m) === "unprocessed").map((m) => m.id);
-  return { inboxStale, orphans, stale, renewals, archiveCandidates, unprocessedBronze, bronze: summarizeBronze(metas) };
+  return { inboxStale, orphans, stale, renewals, archiveCandidates, unprocessedBronze, singleUseTags, redundantTags, bronze: summarizeBronze(metas) };
 }
+
+/** Fields that hold what a tag must not repeat: tags are for topics that cut across domains, not genre / platform / origin. */
+const TAG_FIELDS = ["genre", "subgenre", "platform", "kind"] as const;
+const tagsOf = (fm: Record<string, unknown>) => (Array.isArray(fm.tags) ? fm.tags : []).map(String);
 
 /** kind × processing state, with mail also split by Gmail category (a category that is mostly `-` is a label rule to revisit). */
 export function summarizeBronze(metas: { kind: string; source: string; files: string[]; processed_to: string[] }[]): BronzeSummary[] {

@@ -4,8 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { GOLD, isEncryptedPath, loadConfig } from "./config";
 import { indexNotes, openDb } from "./db";
-import { buildGold } from "./build";
+import { runQuery } from "./query";
 import { archiveNote, lint, summarizeBronze, validateAll, validateBronze } from "./maintain";
+import { buildGold, stockThemes } from "./build";
 import { mailCategory, readMeta } from "./bronze";
 import { SchemaRegistry } from "./schema";
 
@@ -29,9 +30,19 @@ function fixtureRoot(): string {
   schema("review", "200_silver/208_reviews");
   schema("ledger", "200_silver/203_finance");
   schema("project", "200_silver/206_projects");
+  schema("stock", "200_silver/200_market");
+  schema("theme", "200_silver/200_market");
   w("AGENTS.md", "");
   const base = { status: "open", created: "2026-10-01", summary: "s" };
-  note("200_silver/204_books/本A.md", { ...base, type: "book", title: "本A", updated: "2026-10-10" });
+  // tags: `mystery` repeats genre, `kobo` repeats platform, `sailing` is used once, `horror` twice
+  note("200_silver/204_books/本A.md", { ...base, type: "book", title: "本A", updated: "2026-10-10", tags: ["mystery", "kobo", "horror"], genre: "mystery", platform: "kobo" });
+  note("200_silver/204_books/本B.md", { ...base, type: "book", title: "本B", updated: "2026-10-10", tags: ["sailing", "horror"], genre: "nonfiction" });
+  // market: themes carry the stock link in `tickers`; 株B also names a theme itself
+  note("200_silver/200_market/株A.md", { ...base, type: "stock", title: "株A", status: "holding", updated: "2026-10-10", code: "7974", market: "JP" });
+  note("200_silver/200_market/株B.md", { ...base, type: "stock", title: "株B", status: "watch", updated: "2026-10-10", code: "1605", market: "JP", themes: ["テーマ甲"] });
+  note("200_silver/200_market/株C.md", { ...base, type: "stock", title: "株C", status: "watch", updated: "2026-10-10", code: "9999", market: "JP" });
+  note("200_silver/200_market/テーマ甲.md", { ...base, type: "theme", title: "テーマ甲", status: "active", updated: "2026-10-10", tickers: ["7974", "9697"] });
+  note("200_silver/200_market/テーマ乙.md", { ...base, type: "theme", title: "テーマ乙", status: "active", updated: "2026-10-10", tickers: ["1605", "7974"] });
   note("200_silver/203_finance/2026-10.md", { ...base, type: "ledger", title: "2026-10", updated: "2026-10-12", summary: "SECRET-SUMMARY" });
   note("200_silver/208_reviews/W41.md", { ...base, type: "review", title: "W41", updated: "2026-10-11", related: ["../203_finance/2026-10.md"] }, "\n[本](../204_books/本A.md) と [台帳](../203_finance/2026-10.md)\n");
   note("200_silver/206_projects/2026-10_個人/README.md", { ...base, type: "project", title: "個人", status: "active", updated: "2026-10-09" });
@@ -87,6 +98,41 @@ describe("buildGold", () => {
     expect(projects).toContain("仕事（207_work、暗号化）: 進行中 1 件");
     expect(projects).toContain("[個人](../200_silver/206_projects/2026-10_個人/README.md)");
     expect(projects).not.toContain("SECRET");
+  });
+});
+
+describe("stockThemes", () => {
+  test("derives a stock's themes from theme tickers, merged with the stock's own `themes`", () => {
+    const root = fixtureRoot();
+    process.env.KB_DB = join(root, "kb.sqlite");
+    const cfg = loadConfig(root);
+    delete process.env.KB_DB;
+    const db = openDb(cfg);
+    indexNotes(cfg, db);
+    const q = (type: string) => runQuery(db, { filters: [{ field: "type", op: "=", value: type }] });
+    const m = stockThemes(q("stock"), q("theme"));
+    const titles = (p: string) => (m.get(p) ?? []).map((t) => t.title);
+    expect(titles("200_silver/200_market/株A.md")).toEqual(["テーマ乙", "テーマ甲"]);
+    expect(titles("200_silver/200_market/株B.md")).toEqual(["テーマ乙", "テーマ甲"]);
+    expect(m.has("200_silver/200_market/株C.md")).toBe(false);
+    buildGold(cfg, db);
+    const market = readFileSync(join(cfg.gold, GOLD.market), "utf8");
+    expect(market).toContain("| 7974 | [株A](../200_silver/200_market/株A.md) | JP |  | [テーマ乙](../200_silver/200_market/テーマ乙.md)、[テーマ甲](../200_silver/200_market/テーマ甲.md) |");
+    expect(market).toContain("| 9999 | [株C](../200_silver/200_market/株C.md) | JP |  |  |");
+  });
+});
+
+describe("lint tags", () => {
+  test("lists single-use tags and tags that repeat genre / platform", () => {
+    const root = fixtureRoot();
+    process.env.KB_DB = join(root, "kb.sqlite");
+    const cfg = loadConfig(root);
+    delete process.env.KB_DB;
+    const db = openDb(cfg);
+    indexNotes(cfg, db);
+    const r = lint(cfg, db);
+    expect(r.singleUseTags).toEqual(["kobo (200_silver/204_books/本A.md)", "mystery (200_silver/204_books/本A.md)", "sailing (200_silver/204_books/本B.md)"]);
+    expect(r.redundantTags).toEqual(["200_silver/204_books/本A.md: mystery (= genre)", "200_silver/204_books/本A.md: kobo (= platform)"]);
   });
 });
 

@@ -6,7 +6,8 @@
 import type { Database } from "bun:sqlite";
 import { SILVER_PREFIX, type KbConfig } from "./config";
 import type { NoteRow } from "./db";
-import { runQuery, type Filter } from "./query";
+import { queryTerms, runQuery, type Filter } from "./query";
+import { stripSpoilers } from "./chunk";
 import type { Embedder } from "./embed";
 import { VectorStore, sqlStr, type ChunkRow } from "./vector";
 
@@ -145,26 +146,54 @@ export function matchFilter(row: NoteRow, fm: Record<string, unknown>, f: Filter
   }
 }
 
-/** SQLite trigram/LIKE search shaped like hybrid hits. Used as fallback here and directly by the API pod (no Lance there). */
-export function keywordSearch(db: Database, q: string, filters: Filter[], opts: Pick<SearchOpts, "includeArchive" | "limit">): SearchHit[] {
+/**
+ * SQLite trigram/LIKE search shaped like hybrid hits (see runQuery for the term handling and ranking).
+ * Used as fallback here and directly by the API pod (no Lance there). The single match per note shows the
+ * section and text around the first query term in the body, or the summary when the terms only hit metadata.
+ */
+export function keywordSearch(db: Database, q: string, filters: Filter[], opts: Pick<SearchOpts, "includeArchive" | "limit" | "spoilers">): SearchHit[] {
   const res = runQuery(db, { filters, text: q || undefined, includeArchive: opts.includeArchive, limit: opts.limit ?? 10 });
-  return res.filter((r) => r.path.startsWith(SILVER_PREFIX)).map((r) => ({
-    path: r.path, type: r.type, title: r.title, status: r.status, summary: r.summary, tags: r.tags, updated: r.updated, archived: r.archived,
-    score: 0, matches: [{ path: r.path, heading: "", snippet: r.summary, spoiler: false, via: ["keyword"] }],
-  }));
+  const body = db.prepare("SELECT body FROM notes WHERE path = ?");
+  return res.filter((r) => r.path.startsWith(SILVER_PREFIX)).map((r) => {
+    const text = q ? (body.get(r.path) as { body: string } | null)?.body ?? "" : "";
+    const m = q ? bodyExcerpt(opts.spoilers ? text : stripSpoilers(text), q) : null;
+    return {
+      path: r.path, type: r.type, title: r.title, status: r.status, summary: r.summary, tags: r.tags, updated: r.updated, archived: r.archived,
+      score: 0, matches: [{ path: r.path, heading: m?.heading ?? "", snippet: m?.snippet ?? r.summary, spoiler: false, via: ["keyword"] }],
+    };
+  });
 }
 
 /** ~160 chars around the first query term found, else the beginning. */
 export function snippet(text: string, q: string, width = 160): string {
   const flat = text.replace(/\s+/g, " ").trim();
   if (flat.length <= width) return flat;
-  const terms = q.split(/\s+/).filter(Boolean);
+  const at = firstIndex(flat, queryTerms(q));
+  return at < 0 ? flat.slice(0, width) + "…" : window(flat, at, width);
+}
+
+/**
+ * Nearest heading above, and ~width chars around, the first query term in a note body; null if none occurs.
+ * The leading `# title` line is skipped (a hit there is just the title, which the caller already shows).
+ */
+export function bodyExcerpt(body: string, q: string, width = 160): { heading: string; snippet: string } | null {
+  body = body.replace(/^\s*#\s[^\n]*\n/, "");
+  const at = firstIndex(body, queryTerms(q));
+  if (at < 0) return null;
+  const heading = [...body.slice(0, at).matchAll(/^#{2,6}\s+(.+?)\s*#*\s*$/gm)].pop()?.[1] ?? "";
+  return { heading, snippet: window(body, at, width) };
+}
+
+function firstIndex(text: string, terms: string[]): number {
+  const lower = text.toLowerCase();
   let at = -1;
-  for (const t of terms) { const i = flat.toLowerCase().indexOf(t.toLowerCase()); if (i >= 0 && (at < 0 || i < at)) at = i; }
-  if (at < 0) return flat.slice(0, width) + "…";
+  for (const t of terms) { const i = lower.indexOf(t.toLowerCase()); if (i >= 0 && (at < 0 || i < at)) at = i; }
+  return at;
+}
+function window(text: string, at: number, width: number): string {
   const start = Math.max(0, at - Math.floor(width / 3));
-  const end = Math.min(flat.length, start + width);
-  return (start ? "…" : "") + flat.slice(start, end) + (end < flat.length ? "…" : "");
+  const end = Math.min(text.length, start + width);
+  return (start ? "…" : "") + text.slice(start, end).replace(/\s+/g, " ").trim() + (end < text.length ? "…" : "");
 }
 
 const round = (x: number) => Math.round(x * 10000) / 10000;

@@ -24,7 +24,17 @@ Mac                                                k8s API pod (KB_EMBED=off, La
 | `embed.ts` | Ollama `/api/embed` クライアント。モデルごとの次元・クエリ/文書プレフィックス（bge-m3 は不要）。`ping()` でモデル未取得も検知 |
 | `lindera.ts` | `@lancedb/lancedb` 0.40.0 に同梱の lindera 3.0.7 と同じ版の辞書を GitHub Releases から取得し `config.yml` を書く。不在なら `icu` にフォールバック |
 | `vector.ts` | LanceDB テーブル `chunks` の作成・増分更新（hash 差分で削除→追加）・FTS 索引作成・`optimize()`。`meta.json` の model/dim/tokenizer/chunker が変わったら全再構築 |
-| `search.ts` | vector top-k + FTS top-k → RRF(k=60) → ノート単位に集約 → SQLite の frontmatter で残りの条件を評価。Lance/Ollama 不在時は SQLite キーワード検索に degrade |
+| `search.ts` | vector top-k + FTS top-k → RRF(k=60) → ノート単位に集約 → SQLite の frontmatter で残りの条件を評価。Lance/Ollama 不在時は SQLite キーワード検索（`keywordSearch`）に degrade |
+| `query.ts` | `kb query --text` と API の `GET /api/notes?text=`、および上の縮退経路が使う SQLite 検索。`queryTerms` が辞書なしでクエリを語に割る |
+
+## 縮退経路（SQLite キーワード検索）
+
+API pod（`KB_EMBED=off`）と、Mac が応答しないときの WebUI はこの経路しか使えない。`kb search --mode keyword` は LanceDB の BM25 で別物なので、縮退経路の品質は `kb query --text` で確かめる。
+
+- 語の切り出し（`queryTerms`）: 空白で分けた後、各片を文字種（漢字 / カタカナ / 英数）の連続で割る。ひらがなの連続（助詞・送り仮名）と 1 文字の語は捨てる。カタカナ語の末尾「ー」は落とす（ミステリ/ミステリー、サーバ/サーバー を両方拾う）。ひらがなだけの片（「おすすめ」）はそのまま残す。例: 「孤島が舞台のミステリー」→ `孤島` `舞台` `ミステリ`。
+- 一致判定: 各語を title / summary / tags / body に LIKE（部分一致）で当て、含む語の数（`matched`）を数える。全語を含むノートがあればそれだけ（AND）、なければ 1 語でも含むノート（OR）を返す。trigram FTS5 は 3 文字未満の語を引けないので、2 文字の漢語（孤島・銘柄）は LIKE が担う。
+- 順位: `matched` の多い順 → スコア順。スコアは、3 文字以上の語は `bm25(notes_fts, 0, 10, 5, 3, 1)`（title 10 / summary 5 / tags 3 / body 1。先頭の 0 は UNINDEXED の path 列）、2 文字の語は同じ列重みを LIKE で加算したもの。`--order` を指定すると `matched` 順の中でその並びになる。
+- snippet（`keywordSearch`）: 本文（先頭の `# タイトル` 行を除く）で最初に語が出る場所の前後 160 文字と、その直前の見出し。本文に語がなければ summary。`> [!spoiler]` は `spoilers` を指定しない限り除いてから探す。
 
 ## 運用
 

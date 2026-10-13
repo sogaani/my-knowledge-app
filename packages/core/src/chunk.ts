@@ -104,6 +104,11 @@ function splitSections(body: string): { heading: string; lines: string[] }[] {
   return secs.filter((s) => s.lines.some((l) => l.trim()));
 }
 
+/** Body text without its `> [!spoiler]` callouts (for excerpts shown outside the vector path). */
+export function stripSpoilers(body: string): string {
+  return splitSpoilers(body.split("\n")).filter((s) => !s.spoiler).map((s) => s.text).join("\n");
+}
+
 /** Separate `> [!spoiler]` callouts (and the quote lines that follow them) from ordinary text. */
 function splitSpoilers(lines: string[]): { text: string; spoiler: boolean }[] {
   const segs: { text: string; spoiler: boolean }[] = [];

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { PencilIcon } from "lucide-react";
 import { api, type NoteDetail, type TypeDef } from "@/api";
 import Md, { routeFor } from "@/components/Md";
@@ -14,15 +14,23 @@ const READONLY = new Set(["type", "created", "updated", "sources", "related"]);
 const FM_GRID = "my-3 mb-5 grid max-w-[760px] grid-cols-[110px_1fr] items-start gap-x-3 gap-y-1.5 text-sm md:grid-cols-[140px_1fr]";
 
 export default function Note() {
-  const path = decodeURIComponent(useLocation().pathname.replace(/^\/note\//, ""));
+  const loc = useLocation();
+  const navigate = useNavigate();
+  const path = decodeURIComponent(loc.pathname.replace(/^\/note\//, ""));
+  const opened = decodeURIComponent(loc.hash.slice(1)); // e.g. #log.md: open and scroll to that attachment
   const [n, setN] = useState<NoteDetail | null>(null);
   const [def, setDef] = useState<TypeDef | null>(null);
   const [edit, setEdit] = useState<Record<string, string> | null>(null);
   const [line, setLine] = useState("");
   const [err, setErr] = useState<unknown>(null);
   const show = (d: NoteDetail, types: TypeDef[]) => { setN(d); setDef(types.find((t) => t.type === d.type) ?? null); };
-  const load = () => Promise.all([api.note(path), api.types()]).then(([d, types]) => show(d, types)).catch(setErr);
+  const load = () => Promise.all([api.note(path), api.types()]).then(([d, types]) => {
+    // A link to log.md / tasks.md: move to the entity's README page (so edits patch the README) with that attachment open
+    if (d.path !== path) navigate(`/note/${d.path}${d.attachment ? `#${encodeURIComponent(d.attachment)}` : ""}`, { replace: true });
+    else show(d, types);
+  }).catch(setErr);
   useEffect(() => { setN(null); setEdit(null); setErr(null); load(); }, [path]);
+  useEffect(() => { if (n && opened) document.getElementById(`att-${opened}`)?.scrollIntoView({ block: "start" }); }, [n?.path, opened]);
   const save = useAction(async () => {
     if (!edit || !n) return;
     const patch: Record<string, unknown> = {};
@@ -82,7 +90,7 @@ export default function Note() {
         </div>
       )}
       <Md text={n.body} basePath={n.path} />
-      {Object.entries(n.attachments).map(([name, text]) => <details key={name} open={name === "tasks.md"} className="my-3"><summary className="cursor-pointer font-medium">{name}</summary><Md text={text} basePath={n.path} /></details>)}
+      {Object.entries(n.attachments).map(([name, text]) => <details key={name} id={`att-${name}`} open={name === "tasks.md" || name === opened} className="my-3"><summary className="cursor-pointer font-medium">{name}</summary><Md text={text} basePath={n.path} /></details>)}
       <form className="mt-5" onSubmit={(e) => { e.preventDefault(); append.run(); }}>
         <Toolbar>
           <Input className="min-w-52 flex-1" placeholder={appendLabel} aria-label={appendLabel} value={line} onChange={(e) => setLine(e.target.value)} disabled={append.pending} />

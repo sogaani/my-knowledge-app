@@ -1,5 +1,6 @@
 export interface NoteSummary { path: string; type: string; title: string; status: string; summary: string; tags: string[]; fm: Record<string, unknown>; archived: boolean; updated: string }
-export interface NoteDetail { path: string; type: string; title: string; fm: Record<string, unknown>; body: string; archived: boolean; links: string[]; backlinks: string[]; attachments: Record<string, string> }
+/** `attachment`: set when a log.md / tasks.md path was asked for; the payload is then its folder entity's README note. */
+export interface NoteDetail { path: string; type: string; title: string; fm: Record<string, unknown>; body: string; archived: boolean; links: string[]; backlinks: string[]; attachments: Record<string, string>; attachment?: string }
 export interface Job { id: string; kind: string; status: "queued" | "running" | "done" | "failed"; payload: string; result: string | null; log: string; commit: string | null; created_at: string; started_at: string | null; finished_at: string | null }
 export interface ChatMessage { id: string; role: "user" | "assistant"; text: string; sources: string; job_id: string | null; created_at: string }
 export interface SearchMatch { path: string; heading: string; snippet: string; spoiler: boolean; via: ("vector" | "keyword")[] }

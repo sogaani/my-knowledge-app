@@ -133,7 +133,13 @@ api.get("/notes/*", requireUser, (c) => {
   if (!rel) return c.json({ error: "bad path" }, 400);
   if (!existsSync(join(cfg.root, rel))) return c.json({ error: "not found" }, 404);
   const d = noteDetail(rel);
-  return d ? c.json(d) : c.json({ error: "not a note" }, 400);
+  if (d) return c.json(d);
+  // log.md / tasks.md of a folder entity have no frontmatter: answer with the entity, which shows them as attachments
+  const readme = rel.replace(/[^/]+$/, "README.md");
+  const parent = readme !== rel && existsSync(join(cfg.root, readme)) ? noteDetail(readme) : null;
+  const name = basename(rel);
+  if (parent && name in parent.attachments) return c.json({ ...parent, attachment: name });
+  return c.json({ error: "not a note" }, 400);
 });
 
 api.patch("/notes/*", requireUser, async (c) => {

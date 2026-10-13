@@ -112,11 +112,47 @@ export function readMeta(cfg: KbConfig, id: string): BronzeMeta | null {
   return existsSync(p) ? (JSON.parse(readFileSync(p, "utf8")) as BronzeMeta) : null;
 }
 
+function writeMeta(cfg: KbConfig, meta: BronzeMeta) {
+  writeFileSync(join(bronzeDir(cfg, meta.id), "meta.json"), JSON.stringify(meta, null, 2));
+}
+
 export function markProcessed(cfg: KbConfig, id: string, silverPaths: string[]) {
   const meta = readMeta(cfg, id);
   if (!meta) return;
   meta.processed_to = [...new Set([...meta.processed_to, ...silverPaths])];
-  writeFileSync(join(bronzeDir(cfg, id), "meta.json"), JSON.stringify(meta, null, 2));
+  writeMeta(cfg, meta);
+}
+
+/**
+ * A Silver entity moved from `fromRel` to `toRel` (repo-relative, e.g. `kb archive`): point every processed_to entry at
+ * (or under, for folder entities) the old path to the new one. Returns the ids rewritten.
+ */
+export function rewriteProcessedTo(cfg: KbConfig, fromRel: string, toRel: string): string[] {
+  const changed: string[] = [];
+  for (const m of walkBronze(cfg)) {
+    const next = m.processed_to.map((p) => (p === fromRel ? toRel : p.startsWith(fromRel + "/") ? toRel + p.slice(fromRel.length) : p));
+    if (next.every((p, i) => p === m.processed_to[i])) continue;
+    m.processed_to = [...new Set(next)];
+    writeMeta(cfg, m);
+    changed.push(m.id);
+  }
+  return changed;
+}
+
+/** Where a Bronze item ended up: in Silver, reviewed with nothing to reflect (`-` only), or not yet processed. */
+export type ProcessState = "silver" | "none" | "unprocessed";
+export function processState(meta: Pick<BronzeMeta, "processed_to">): ProcessState {
+  if (!meta.processed_to.length) return "unprocessed";
+  return meta.processed_to.every((p) => p === "-") ? "none" : "silver";
+}
+
+/** Gmail category from the file name the collector / Apps Script push used (mail-YYYYMMDD-<category>-<id>.*), or null. */
+export function mailCategory(meta: Pick<BronzeMeta, "source" | "files">): string | null {
+  for (const name of [meta.source, ...meta.files]) {
+    const m = /^mail-\d{8}-([a-z]+)-/.exec(basename(name));
+    if (m) return m[1];
+  }
+  return null;
 }
 
 /** Return meta + an excerpt (first N chars of the best text file). Logs the access. */

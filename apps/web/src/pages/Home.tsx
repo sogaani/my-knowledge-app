@@ -7,6 +7,10 @@ import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
 import { formatTotals } from "@/lib/utils";
 import { typeLabel } from "../App";
 
+/** Problem lists only: `bronze` is a per-kind summary and `unprocessedBronze` already lists its items. */
+const lintIssues = (lint: HomeData["lint"]): [string, string[]][] =>
+  Object.entries(lint).filter((e): e is [string, string[]] => e[0] !== "bronze" && Array.isArray(e[1]));
+
 const Stat = ({ big, sub, to, link }: { big: React.ReactNode; sub: React.ReactNode; to: string; link: string }) => (
   <Card className="gap-1 py-4">
     <CardContent className="space-y-0.5">
@@ -42,8 +46,8 @@ export default function Home() {
           <ul className="list-disc space-y-1 pl-5">{d.projects.map((p) => <li key={p.path}><NoteLink n={p} /> {p.fm.due ? <span className="text-sm text-muted-foreground">期限 {String(p.fm.due)}</span> : null}<div className="text-sm text-muted-foreground">{p.summary}</div></li>)}</ul>
           <Section>保守</Section>
           <ul className="list-disc space-y-1 pl-5 text-sm">
-            {Object.entries(d.lint).filter(([, v]) => v.length).map(([k, v]) => <li key={k}><b>{k}</b>: {v.length} 件 <span className="text-muted-foreground">{v.slice(0, 3).join(", ")}{v.length > 3 ? " …" : ""}</span></li>)}
-            {Object.values(d.lint).every((v) => v.length === 0) && <li className="text-muted-foreground">問題なし</li>}
+            {lintIssues(d.lint).filter(([, v]) => v.length).map(([k, v]) => <li key={k}><b>{k}</b>: {v.length} 件 <span className="text-muted-foreground">{v.slice(0, 3).join(", ")}{v.length > 3 ? " …" : ""}</span></li>)}
+            {lintIssues(d.lint).every(([, v]) => v.length === 0) && <li className="text-muted-foreground">問題なし</li>}
           </ul>
         </section>
         <section className="min-w-0">

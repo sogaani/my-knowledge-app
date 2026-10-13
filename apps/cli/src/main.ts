@@ -233,9 +233,14 @@ switch (cmd) {
     process.exit(errors.length ? 1 : 0);
   }
   case "lint": {
-    const r = lint(cfg, db());
-    if (argv.includes("--json")) json(r);
-    else for (const [k, v] of Object.entries(r)) if (v.length) console.log(`## ${k}\n` + v.map((x: string) => `- ${x}`).join("\n"));
+    const { bronze, ...lists } = lint(cfg, db());
+    if (argv.includes("--json")) json({ bronze, ...lists });
+    else {
+      for (const [k, v] of Object.entries(lists)) if (v.length) console.log(`## ${k}\n` + v.map((x: string) => `- ${x}`).join("\n"));
+      // kind × processing state; mail per Gmail category under its kind row
+      if (bronze.length) console.log("## bronze (silver / - / unprocessed)\n" + bronze.map((b) =>
+        `- ${b.category ? `  ${b.kind}/${b.category}` : b.kind}: ${b.total} = ${b.silver} / ${b.none} / ${b.unprocessed}`).join("\n"));
+    }
     break;
   }
   case "backup": {
@@ -326,7 +331,7 @@ switch (cmd) {
                                      semantic + keyword search (LanceDB; Ollama for vectors)
   embed [--full] | embed --check | embed --setup   (re)embed Silver into LanceDB | status | install Lindera dict + pull model
   index [--full] | build             refresh SQLite + LanceDB index | regenerate 300_gold
-  archive <path> [--status done]     move to _archive/ and rewrite links
+  archive <path> [--status done]     move to _archive/ and rewrite links and Bronze processed_to
   validate [--quiet] | lint [--json]
   backup [--dest d] [--dry-run] | prune [--older-than 3] [--type web] [--dry-run]`);
 }

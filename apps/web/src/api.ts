@@ -10,7 +10,7 @@ export interface TypeDef { type: string; folder: string; entity: string; statuse
 export interface Home {
   counts: { type: string; c: number }[]; monthlySubscriptions: { currency: string; amount: number }[]; activeSubscriptions: number; // monthly totals per currency, never summed across
   books: Record<string, number>; media: Record<string, number>; projects: NoteSummary[]; recent: NoteSummary[]; jobs: Job[];
-  lint: Record<string, string[]>; head: string; unpushed?: number; pushError?: string | null;
+  lint: Record<string, string[] | unknown[]>; head: string; unpushed?: number; pushError?: string | null; // `bronze` is a per-kind summary, not a problem list
 }
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {

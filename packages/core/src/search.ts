@@ -1,6 +1,7 @@
 /**
  * Hybrid search over Silver notes: LanceDB vector (Ollama dense) + LanceDB BM25 (Lindera tokens),
- * fused with Reciprocal Rank Fusion, grouped per note, joined with SQLite for frontmatter filters.
+ * fused with Reciprocal Rank Fusion, cut at a cosine-distance threshold, grouped per note (with a confidence),
+ * joined with SQLite for frontmatter filters.
  * Falls back to the SQLite trigram search when the vector store or Ollama is unavailable.
  */
 import type { Database } from "bun:sqlite";
@@ -23,14 +24,30 @@ export interface SearchOpts {
   /** show spoiler chunk text in snippets (default false) */
   spoilers?: boolean;
 }
-export interface SearchMatch { path: string; heading: string; snippet: string; spoiler: boolean; via: ("vector" | "keyword")[] }
+export interface SearchMatch {
+  path: string; heading: string; snippet: string; spoiler: boolean; via: ("vector" | "keyword")[];
+  /** cosine distance of the chunk to the query (vector retriever; 0 = identical) */
+  vectorDistance?: number;
+  /** BM25 score (keyword retriever) */
+  bm25?: number;
+}
+/** `high`: a lexical hit or a close vector neighbour backs the note. `low`: only a loose semantic resemblance (or a partial term match). */
+export type Confidence = "high" | "low";
 export interface SearchHit {
   path: string; type: string; title: string; status: string; summary: string; tags: string[]; updated: string; archived: boolean;
-  score: number; matches: SearchMatch[];
+  score: number; confidence: Confidence; matches: SearchMatch[];
 }
 export interface SearchResponse { hits: SearchHit[]; mode: SearchMode; degraded?: string }
 
 const RRF_K = 60;
+/**
+ * bge-m3 cosine distance above which a chunk that only the vector retriever found, and that contains none of the
+ * query terms, is dropped (so an off-topic query returns nothing instead of `limit` neighbours). Measured on the
+ * real index — see docs/search.md: on-topic chunks sit at 0.38–0.55, the best neighbour of an off-topic query at 0.59+.
+ */
+export const VECTOR_CUTOFF = 0.55;
+/** Distance at or below which a vector hit alone (on a non-thin chunk) counts as strong evidence for a note. */
+export const VECTOR_STRONG = 0.5;
 /**
  * Weight of a `thin` chunk (a note with nothing but its header) that only the vector retriever found: similarity on a
  * title + summary alone is weak evidence, so such notes sit below ones with content. A lexical hit keeps full weight.
@@ -72,8 +89,9 @@ export async function search(cfg: KbConfig, db: Database, query: string, opts: S
     mode !== "vector" ? store.ftsSearch(q, { where, limit: k }).catch((e) => { degraded = `fts: ${(e as Error).message}`; return [] as ChunkRow[]; }) : Promise.resolve([] as ChunkRow[]),
   ]);
 
-  const fused = rrf([{ via: "vector", rows: vecRows }, { via: "keyword", rows: ftsRows }]);
-  const byNote = new Map<string, { score: number; chunks: { row: ChunkRow; score: number; via: ("vector" | "keyword")[] }[] }>();
+  const terms = queryTerms(q);
+  const fused = cutoff(rrf([{ via: "vector", rows: vecRows }, { via: "keyword", rows: ftsRows }]), terms);
+  const byNote = new Map<string, { score: number; chunks: Fused[] }>();
   for (const f of fused) {
     const g = byNote.get(f.row.note_path) ?? { score: 0, chunks: [] };
     g.score = Math.max(g.score, f.score);
@@ -91,10 +109,12 @@ export async function search(cfg: KbConfig, db: Database, query: string, opts: S
     if (!rest.every((f) => matchFilter(row, fm, f))) continue;
     hits.push({
       path, type: row.type, title: row.title, status: row.status, summary: row.summary, tags: JSON.parse(row.tags || "[]"),
-      updated: row.updated, archived: !!row.archived, score: round(g.score),
+      updated: row.updated, archived: !!row.archived, score: round(g.score), confidence: confidence(g.chunks, terms),
       matches: g.chunks.sort((a, b) => b.score - a.score).slice(0, 3).map((c) => ({
         path: c.row.path, heading: c.row.heading, spoiler: c.row.spoiler, via: c.via,
         snippet: c.row.spoiler && !opts.spoilers ? "（ネタバレ：折りたたみ）" : snippet(c.row.text, q),
+        ...(c.row._distance != null ? { vectorDistance: round(c.row._distance) } : {}),
+        ...(c.row._score != null ? { bm25: round(c.row._score) } : {}),
       })),
     });
     if (hits.length >= limit) break;
@@ -102,12 +122,16 @@ export async function search(cfg: KbConfig, db: Database, query: string, opts: S
   return { hits, mode, degraded };
 }
 
+export interface Fused { row: ChunkRow; score: number; via: ("vector" | "keyword")[] }
+
 /** Reciprocal Rank Fusion across retrievers (vector-only thin chunks weighted by THIN_WEIGHT); returns chunk rows sorted by fused score. */
-export function rrf(lists: { via: "vector" | "keyword"; rows: ChunkRow[] }[], k = RRF_K, thinWeight = THIN_WEIGHT) {
-  const acc = new Map<string, { row: ChunkRow; score: number; via: ("vector" | "keyword")[] }>();
+export function rrf(lists: { via: "vector" | "keyword"; rows: ChunkRow[] }[], k = RRF_K, thinWeight = THIN_WEIGHT): Fused[] {
+  const acc = new Map<string, Fused>();
   for (const { via, rows } of lists) {
     rows.forEach((row, rank) => {
       const e = acc.get(row.id) ?? { row, score: 0, via: [] };
+      // the same chunk from the other retriever carries the other measure (_distance from vector, _score from fts)
+      if (e.row !== row) e.row = { ...e.row, ...(row._distance != null ? { _distance: row._distance } : {}), ...(row._score != null ? { _score: row._score } : {}) };
       e.score += 1 / (k + rank + 1);
       e.via.push(via);
       acc.set(row.id, e);
@@ -115,6 +139,31 @@ export function rrf(lists: { via: "vector" | "keyword"; rows: ChunkRow[] }[], k 
   }
   for (const e of acc.values()) if (e.row.thin && !e.via.includes("keyword")) e.score *= thinWeight;
   return [...acc.values()].sort((a, b) => b.score - a.score);
+}
+
+/** Any of the query terms (see queryTerms) occurs literally in the text. */
+export function hasTerm(text: string, terms: string[]): boolean {
+  const lower = text.toLowerCase();
+  return terms.some((t) => lower.includes(t.toLowerCase()));
+}
+
+/**
+ * Relevance cut after fusion: a chunk that only the vector retriever found, farther than `maxDistance`, with none of
+ * the query terms in its text, is noise and is dropped. Keyword hits and lexical matches are kept whatever the distance.
+ */
+export function cutoff(fused: Fused[], terms: string[], maxDistance = VECTOR_CUTOFF): Fused[] {
+  return fused.filter((f) => f.via.includes("keyword") || !(f.row._distance! > maxDistance) || hasTerm(f.row.text, terms));
+}
+
+/**
+ * `high` when some chunk of the note was a keyword hit that literally contains a query term (BM25 alone can match on
+ * sub-tokens such as `5` + `G`), or a non-thin chunk is within VECTOR_STRONG of the query. Everything else is `low`:
+ * vector-only neighbours between VECTOR_STRONG and VECTOR_CUTOFF, thin (header-only) notes, keyword hits without the term.
+ */
+export function confidence(chunks: Fused[], terms: string[]): Confidence {
+  const strong = chunks.some((c) =>
+    (c.via.includes("keyword") && hasTerm(c.row.text, terms)) || (!c.row.thin && c.row._distance != null && c.row._distance <= VECTOR_STRONG));
+  return strong ? "high" : "low";
 }
 
 export function buildWhere(filters: Filter[], includeArchive: boolean): string | undefined {
@@ -160,12 +209,14 @@ export function matchFilter(row: NoteRow, fm: Record<string, unknown>, f: Filter
 export function keywordSearch(db: Database, q: string, filters: Filter[], opts: Pick<SearchOpts, "includeArchive" | "limit" | "spoilers">): SearchHit[] {
   const res = runQuery(db, { filters, text: q || undefined, includeArchive: opts.includeArchive, limit: opts.limit ?? 10 });
   const body = db.prepare("SELECT body FROM notes WHERE path = ?");
+  const need = q ? queryTerms(q).length : 0; // `high` only when the note contains every term (runQuery's AND pass)
   return res.filter((r) => r.path.startsWith(SILVER_PREFIX)).map((r) => {
     const text = q ? (body.get(r.path) as { body: string } | null)?.body ?? "" : "";
     const m = q ? bodyExcerpt(opts.spoilers ? text : stripSpoilers(text), q) : null;
     return {
       path: r.path, type: r.type, title: r.title, status: r.status, summary: r.summary, tags: r.tags, updated: r.updated, archived: r.archived,
-      score: 0, matches: [{ path: r.path, heading: m?.heading ?? "", snippet: m?.snippet ?? r.summary, spoiler: false, via: ["keyword"] }],
+      score: 0, confidence: (r.matched ?? 0) >= need ? "high" : "low",
+      matches: [{ path: r.path, heading: m?.heading ?? "", snippet: m?.snippet ?? r.summary, spoiler: false, via: ["keyword"] }],
     };
   });
 }

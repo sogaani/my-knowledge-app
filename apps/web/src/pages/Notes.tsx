@@ -99,12 +99,13 @@ export default function Notes() {
           </p>
           <div className="space-y-2.5">
             {res.hits.map((h) => (
-              <Card key={h.path} className="gap-1 py-3">
+              <Card key={h.path} className={h.confidence === "low" ? "gap-1 py-3 opacity-70" : "gap-1 py-3"}>
                 <CardContent className="space-y-1">
                   <div className="flex flex-wrap items-center gap-1.5">
                     <NoteLink n={h} /> <Chip>{typeLabel(h.type)}</Chip> <Status s={h.status} />
                     {h.archived && <Chip>archive</Chip>}
-                    <span className="ml-auto text-sm text-muted-foreground">{h.score ? h.score.toFixed(3) : ""} · {h.updated}</span>
+                    {h.confidence === "low" && <span title="意味が近いだけ（語の一致や強い類似はない）"><Chip className="text-muted-foreground">弱い一致</Chip></span>}
+                    <span className="ml-auto text-sm text-muted-foreground">{h.updated}</span>
                   </div>
                   {h.summary && <div className="text-sm text-muted-foreground">{h.summary}</div>}
                   {h.matches.map((m, i) => (

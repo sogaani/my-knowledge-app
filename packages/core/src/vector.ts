@@ -23,6 +23,7 @@ export interface VectorMeta { model: string; dim: number; tokenizer: string; chu
 export interface ChunkRow {
   id: string; path: string; note_path: string; idx: number; heading: string; text: string; spoiler: boolean; thin: boolean;
   type: string; domain: string; status: string; archived: boolean; updated: string; note_hash: string; vector: number[];
+  /** Set by vectorSearch (cosine distance, 0 = identical) and ftsSearch (BM25 score) respectively. */
   _distance?: number; _score?: number;
 }
 
@@ -127,16 +128,18 @@ export class VectorStore {
     if (this.table) await this.table.optimize();
   }
 
+  /** Rows carry `_distance`; it has to be selected explicitly (Lance warns, and will stop adding it by default). */
   async vectorSearch(vector: number[], opts: { where?: string; limit: number }): Promise<ChunkRow[]> {
     if (!this.table) return [];
-    let q = this.table.vectorSearch(vector).distanceType("cosine").limit(opts.limit).select(this.selectCols);
+    let q = this.table.vectorSearch(vector).distanceType("cosine").limit(opts.limit).select([...this.selectCols, "_distance"]);
     if (opts.where) q = q.where(opts.where);
     return (await q.toArray()) as ChunkRow[];
   }
 
+  /** Rows carry `_score` (BM25). */
   async ftsSearch(text: string, opts: { where?: string; limit: number }): Promise<ChunkRow[]> {
     if (!this.table) return [];
-    let q = this.table.search(text, "fts", "text").limit(opts.limit).select(this.selectCols);
+    let q = this.table.search(text, "fts", "text").limit(opts.limit).select([...this.selectCols, "_score"]);
     if (opts.where) q = q.where(opts.where);
     return (await q.toArray()) as ChunkRow[];
   }

@@ -7,7 +7,7 @@ import { loadConfig, type KbConfig } from "./config";
 import { openDb, indexNotes } from "./db";
 import type { Embedder, EmbedProfile } from "./embed";
 import { VectorStore, embedNotes } from "./vector";
-import { search, rrf, buildWhere, snippet, THIN_WEIGHT } from "./search";
+import { search, rrf, cutoff, confidence, buildWhere, snippet, THIN_WEIGHT, VECTOR_CUTOFF, VECTOR_STRONG } from "./search";
 import type { ChunkRow } from "./vector";
 
 const DIM = 16;
@@ -108,6 +108,16 @@ describe("VectorStore + embedNotes", () => {
     const hy = await search(cfg, db, "ラーメン", { mode: "hybrid" }, { store, embedder: emb });
     expect(hy.mode).toBe("hybrid");
     expect(hy.hits[0].path).toBe("200_silver/204_books/ラーメン本.md");
+    // distances / scores come back from Lance and a keyword hit containing the term is high confidence
+    expect(hy.hits[0].confidence).toBe("high");
+    const top = hy.hits[0].matches[0];
+    expect(top.via).toContain("keyword");
+    expect(top.bm25).toBeGreaterThan(0);
+    expect(top.vectorDistance).toBeGreaterThanOrEqual(0);
+    expect(hy.hits.every((h) => h.confidence === "high" || h.confidence === "low")).toBe(true);
+    const kwOnly = await search(cfg, db, "ラーメン", { mode: "keyword" }, { store, embedder: emb });
+    expect(kwOnly.hits[0].matches[0].vectorDistance).toBeUndefined();
+    expect(kwOnly.hits[0].matches[0].bm25).toBeGreaterThan(0);
 
     // frontmatter filter evaluated against SQLite
     const f = await search(cfg, db, "殺人", { mode: "keyword", filters: [{ field: "rating", op: ">=", value: "5" }] }, { store, embedder: emb });
@@ -124,6 +134,7 @@ describe("VectorStore + embedNotes", () => {
     expect(hy.mode).toBe("keyword");
     expect(hy.degraded).toContain("ollama unreachable");
     expect(hy.hits[0].path).toBe("200_silver/204_books/十角館の殺人.md");
+    expect(hy.hits[0].confidence).toBe("high");
     const v = await search(cfg, db, "殺人", { mode: "vector" }, { store, embedder: down });
     expect(v.mode).toBe("keyword");
     expect(v.hits.length).toBeGreaterThan(0);
@@ -137,6 +148,10 @@ describe("helpers", () => {
     expect(r[0].row.id).toBe("b");
     expect(r[0].via).toEqual(["vector", "keyword"]);
     expect(r[0].score).toBeCloseTo(1 / 61 + 1 / 62);
+    // both measures survive fusion whichever retriever listed the chunk first
+    const m = rrf([{ via: "vector", rows: [{ ...row("x"), _distance: 0.4 }] }, { via: "keyword", rows: [{ ...row("x"), _score: 7 }] }]);
+    expect(m[0].row._distance).toBe(0.4);
+    expect(m[0].row._score).toBe(7);
   });
   test("rrf weighs vector-only thin chunks down, keyword hits on thin chunks keep full weight", () => {
     const thin = { ...row("t"), thin: true };
@@ -146,6 +161,33 @@ describe("helpers", () => {
     const r2 = rrf([{ via: "vector", rows: [thin, row("a")] }, { via: "keyword", rows: [thin] }]);
     expect(r2[0].row.id).toBe("t");
     expect(r2[0].score).toBeCloseTo(2 / 61);
+  });
+  test("cutoff drops far vector-only chunks without a query term; keyword hits and lexical matches survive", () => {
+    const far = { ...row("far"), _distance: VECTOR_CUTOFF + 0.05 };
+    const near = { ...row("near"), _distance: VECTOR_CUTOFF - 0.05 };
+    const farLex = { ...row("farlex"), text: "東京のラーメン店", _distance: VECTOR_CUTOFF + 0.1 };
+    const farKw = { ...row("farkw"), _distance: VECTOR_CUTOFF + 0.1 };
+    const kept = cutoff(rrf([{ via: "vector", rows: [far, near, farLex, farKw] }, { via: "keyword", rows: [farKw] }]), ["ラーメン"]);
+    expect(kept.map((f) => f.row.id).sort()).toEqual(["farkw", "farlex", "near"]);
+    // every candidate off-topic → nothing left (the caller returns 0 hits instead of `limit` neighbours)
+    expect(cutoff(rrf([{ via: "vector", rows: [far] }]), ["ラーメン"])).toHaveLength(0);
+    // rows without a distance (older callers / keyword mode) are never dropped
+    expect(cutoff(rrf([{ via: "vector", rows: [row("nodist")] }]), ["x"])).toHaveLength(1);
+  });
+  test("confidence: keyword hit with the term, or a close non-thin vector neighbour, is high; the rest low", () => {
+    const terms = ["ラーメン"];
+    const kwWithTerm = rrf([{ via: "keyword", rows: [{ ...row("a"), text: "ラーメン" }] }]);
+    expect(confidence(kwWithTerm, terms)).toBe("high");
+    const kwSubtoken = rrf([{ via: "keyword", rows: [{ ...row("b"), text: "ラー油", _distance: 0.6 }] }]);
+    expect(confidence(kwSubtoken, terms)).toBe("low");
+    const close = rrf([{ via: "vector", rows: [{ ...row("c"), _distance: VECTOR_STRONG - 0.01 }] }]);
+    expect(confidence(close, terms)).toBe("high");
+    const closeThin = rrf([{ via: "vector", rows: [{ ...row("d"), thin: true, _distance: VECTOR_STRONG - 0.01 }] }]);
+    expect(confidence(closeThin, terms)).toBe("low");
+    const loose = rrf([{ via: "vector", rows: [{ ...row("e"), _distance: (VECTOR_STRONG + VECTOR_CUTOFF) / 2 }] }]);
+    expect(confidence(loose, terms)).toBe("low");
+    // one strong chunk is enough for the note
+    expect(confidence([...loose, ...close], terms)).toBe("high");
   });
   test("buildWhere escapes and skips non-lance fields", () => {
     expect(buildWhere([{ field: "type", op: "=", value: "bo'ok" }, { field: "rating", op: ">=", value: "4" }], false)).toBe("archived = false AND type = 'bo''ok'");

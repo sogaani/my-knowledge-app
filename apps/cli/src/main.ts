@@ -175,8 +175,9 @@ switch (cmd) {
     if (f.json) { json(res); break; }
     if (res.degraded) warn(`search: ${res.mode} (degraded: ${res.degraded})`);
     for (const h of res.hits) {
-      console.log(`${h.score.toFixed(4)}  ${h.type.padEnd(12)} ${h.path}${h.archived ? "  [archive]" : ""}\n  ${h.title}${h.summary ? " — " + h.summary : ""}`);
-      for (const m of h.matches) console.log(`    [${m.via.join("+")}]${m.heading ? ` ${m.heading}:` : ""} ${m.snippet}`);
+      // ● high / ○ low confidence (see docs/search.md); vector matches also show their cosine distance
+      console.log(`${h.confidence === "high" ? "●" : "○"} ${h.score.toFixed(4)}  ${h.type.padEnd(12)} ${h.path}${h.archived ? "  [archive]" : ""}\n  ${h.title}${h.summary ? " — " + h.summary : ""}`);
+      for (const m of h.matches) console.log(`    [${m.via.join("+")}${m.vectorDistance != null ? ` d=${m.vectorDistance.toFixed(2)}` : ""}]${m.heading ? ` ${m.heading}:` : ""} ${m.snippet}`);
     }
     if (!res.hits.length) console.log("(no hits)");
     break;
@@ -328,7 +329,7 @@ switch (cmd) {
   portfolio import <csv|bronze-id> [--account 楽天証券]   update the portfolio note from a 楽天証券 asset CSV (CP932 ok)
   query [type=book rating>=4] [--text "..."] [--include-archive] [--json] [--limit n] [--order -updated]
   search "<query>" [type=book ...] [--mode hybrid|vector|keyword] [--limit 10] [--include-archive] [--spoilers] [--json]
-                                     semantic + keyword search (LanceDB; Ollama for vectors)
+                                     semantic + keyword search (LanceDB; Ollama for vectors). ● high / ○ low confidence
   embed [--full] | embed --check | embed --setup   (re)embed Silver into LanceDB | status | install Lindera dict + pull model
   index [--full] | build             refresh SQLite + LanceDB index | regenerate 300_gold
   archive <path> [--status done]     move to _archive/ and rewrite links and Bronze processed_to

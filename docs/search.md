@@ -24,7 +24,7 @@ Mac                                                k8s API pod (KB_EMBED=off, La
 | `embed.ts` | Ollama `/api/embed` クライアント。モデルごとの次元・クエリ/文書プレフィックス（bge-m3 は不要）。`ping()` でモデル未取得も検知 |
 | `lindera.ts` | `@lancedb/lancedb` 0.40.0 に同梱の lindera 3.0.7 と同じ版の辞書を GitHub Releases から取得し `config.yml` を書く。不在なら `icu` にフォールバック |
 | `vector.ts` | LanceDB テーブル `chunks` の作成・増分更新（hash 差分で削除→追加）・FTS 索引作成・`optimize()`。`meta.json` の model/dim/tokenizer/chunker が変わったら全再構築 |
-| `search.ts` | vector top-k + FTS top-k → RRF(k=60、vector だけが拾った `thin` chunk は 0.5 倍）→ ノート単位に集約 → SQLite の frontmatter で残りの条件を評価。Lance/Ollama 不在時は SQLite キーワード検索（`keywordSearch`）に degrade |
+| `search.ts` | vector top-k + FTS top-k → RRF(k=60、vector だけが拾った `thin` chunk は 0.5 倍）→ 距離の足切り（`cutoff`）→ ノート単位に集約して `confidence` を付ける → SQLite の frontmatter で残りの条件を評価。Lance/Ollama 不在時は SQLite キーワード検索（`keywordSearch`）に degrade |
 | `query.ts` | `kb query --text` と API の `GET /api/notes?text=`、および上の縮退経路が使う SQLite 検索。`queryTerms` が辞書なしでクエリを語に割る |
 
 ## chunk の作り方（`CHUNKER_VERSION = 2`）
@@ -37,6 +37,29 @@ Mac                                                k8s API pod (KB_EMBED=off, La
 - 空の `> [!spoiler]- ネタバレ`（テンプレートの placeholder。本文行なし）は chunk にしない。
 - 本文（と添付）から chunk が 1 つも出ないノートは header chunk に `thin=true` を立てる。`search.ts` の RRF は、vector だけが拾った thin chunk の融合スコアを `THIN_WEIGHT`（0.5）倍にする。BM25 でも当たった（タイトル・summary に語がある）thin chunk は減点しない。summary の雰囲気だけが似ている空ノートが本文のあるノートの下に落ちる一方、`5G` で『5G教科書』の空ノートが上位に残る。
 - LanceDB の列 `thin`（Bool）はこの版で追加。古い索引には列がないので `VectorStore.open` はスキーマにある列だけ select し、`thin` 無しの行は減点なしで検索できる。移行は `kb embed --full`（または `chunker` 不一致による自動全再構築）。列を足す・変えるときも同じ: スキーマは `VectorStore.reset` で作り直すので、`CHUNKER_VERSION` を上げて全再構築すればよい。
+
+## 関連度の足切りと confidence
+
+RRF は順位しか見ないので、何も当たらないクエリでも `limit` 件が埋まる。`vectorSearch` / `ftsSearch` は `_distance`（cosine 距離、0 = 同一）と `_score`（BM25）を select に含めて chunk に残し（Lance は select に `_distance` を含めないと deprecation warning を出す）、融合後に次の 2 段階で使う。`--json` では `matches[].vectorDistance` / `matches[].bm25` と `hits[].confidence` に出る。
+
+- 足切り（`cutoff`、`VECTOR_CUTOFF = 0.55`）: vector だけが拾い、距離が 0.55 より大きく、chunk の `text` にクエリの語（`queryTerms`）が 1 つも無い chunk を捨てる。BM25 が当てた chunk と語を含む chunk は距離に関係なく残す。全部落ちれば 0 件。
+- `confidence`（ノート単位）: `high` = いずれかの chunk が「BM25 で当たり、かつ `text` にクエリの語を含む」か「thin でなく距離 ≤ `VECTOR_STRONG`（0.50）」。それ以外は `low`（0.50〜0.55 の vector 近傍、thin ノート、語を含まない BM25 当たり — lindera は `5G` を `5` + `G` に割るので BM25 単独は信用しない）。縮退経路（`keywordSearch`）は全語を含む（runQuery の AND 段）ノートを `high`、OR で拾ったノートを `low` にする。
+- CLI は行頭に `●`（high）/ `○`（low）、vector の match に `d=0.48` を出す。WebUI は生スコアを出さず、`low` のカードを薄くして「弱い一致」バッジを付ける。ask スキルは `low` のノートを開かない。
+
+閾値の根拠（2026-10-13、bge-m3 dense 1024、chunker v2、526 行、`archived = false` で vector top-50 を実測）:
+
+| クエリ | 関連 chunk の距離 | 無関係 chunk の距離 |
+|---|---|---|
+| `Cloudflare Durable Objects` | 0.375〜0.476（学習ノートの 4 chunk、全部 BM25 も当たる） | 0.507〜（thin の本・映画が 5〜6 位） |
+| `自治体DX` | 0.408〜0.520（theme と関連銘柄） | 0.577〜 |
+| `5G` | 0.438〜0.497（5G 教科書 2 冊・モバイル通信の学習） | 0.565〜 |
+| `ドラム式洗濯機` | 0.438〜0.542（購入プロジェクトの 4 chunk） | 0.584〜 |
+| `KDDI` | 0.476〜0.604（stock と trade_plan、全部 BM25 も当たる） | 0.649〜（台帳・他 theme） |
+| `孤島が舞台のミステリー` | 0.416〜0.485（該当の本）、0.515〜0.55（他のミステリ。summary に `ミステリ` を含む） | 0.563〜 |
+| `量子コンピュータの冷却方式`（KB に無い話題） | — | 最近傍 0.592、BM25 0 件 |
+| `フランス革命の原因`（KB に無い話題） | — | 最近傍 0.666、BM25 0 件 |
+
+関連 chunk は 0.38〜0.55、無関係クエリの最近傍は 0.59 以上なので境界を 0.55 に置いた。0.50〜0.55 には「同ジャンルの別の本」のような弱い近傍が混じるため `high` の線は 0.50。モデル（`embedding.model`）や chunker を変えたら同じ計測をやり直す（上の表のクエリを `kb search --json` で流して `vectorDistance` を見る）。
 
 ## 縮退経路（SQLite キーワード検索）
 

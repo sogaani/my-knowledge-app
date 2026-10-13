@@ -28,6 +28,8 @@ export function parseFilters(tokens: string[]): { filters: Filter[]; rest: strin
 export interface QueryResult {
   path: string; type: string; title: string; status: string; summary: string; tags: string[];
   fm: Record<string, unknown>; archived: boolean; updated: string; score?: number;
+  /** With `text`: how many of its terms the note contains (all of them when the AND pass had results). */
+  matched?: number;
 }
 
 export function runQuery(db: Database, q: QueryOpts): QueryResult[] {
@@ -83,7 +85,7 @@ export function runQuery(db: Database, q: QueryOpts): QueryResult[] {
   if (terms.length && rows[0]?.matched === terms.length) rows = rows.filter((r) => r.matched === terms.length);
   return rows.map((r) => ({
     path: r.path, type: r.type, title: r.title, status: r.status, summary: r.summary,
-    tags: JSON.parse(r.tags || "[]"), fm: JSON.parse(r.fm), archived: !!r.archived, updated: r.updated, score: r.score,
+    tags: JSON.parse(r.tags || "[]"), fm: JSON.parse(r.fm), archived: !!r.archived, updated: r.updated, score: r.score, matched: r.matched,
   }));
 }
 

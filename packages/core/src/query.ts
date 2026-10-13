@@ -47,6 +47,10 @@ export function runQuery(db: Database, q: QueryOpts): QueryResult[] {
       const expr = `json_extract(n.fm, '$.${f.field}')`;
       const num = Number(f.value);
       if (f.op === "~") { where.push(`${expr} LIKE ?`); params.push(`%${f.value}%`); }
+      // `rating=` / `rating!=`: the field is unset (missing, null or "" from a template)
+      else if (f.value === "" && (f.op === "=" || f.op === "!=")) where.push(`${f.op === "!=" ? "NOT " : ""}(${expr} IS NULL OR ${expr} = '')`);
+      // `imported=true`: json_extract yields 1 / 0 for a YAML boolean
+      else if (f.value === "true" || f.value === "false") { where.push(`${expr} ${sqlOp(f.op)} ?`); params.push(f.value === "true" ? 1 : 0); }
       else if (!Number.isNaN(num) && f.value !== "") { where.push(`CAST(${expr} AS REAL) ${f.op} ?`); params.push(num); }
       else { where.push(`${expr} ${sqlOp(f.op)} ?`); params.push(f.value); }
     }

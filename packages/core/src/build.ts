@@ -7,6 +7,7 @@ import { runQuery, type QueryResult } from "./query";
 import { buildCrossViews } from "./views";
 import { currencyOf, formatMoney, formatTotals, monthlyByCurrency } from "./money";
 import { RECOMMENDATION_TYPE, currentRecommendation, parseSuggestions, readSuggestionBody, suggestionCounts } from "./suggest";
+import { IMPORTED_SUMMARY, bookDate, bookYear, unratedImported } from "./books";
 
 /** Regenerate every Gold markdown file from the index. Gold is derived; never hand-edited. */
 export function buildGold(cfg: KbConfig, db: Database): string[] {
@@ -48,19 +49,26 @@ export function buildGold(cfg: KbConfig, db: Database): string[] {
       .map((l) => `| ${link(l)} | ¥${Math.round(Number(l.fm.total ?? 0)).toLocaleString()} | ${l.status} | ${l.summary ?? ""} |`),
   ].join("\n"));
 
-  // 304 books
-  const books = q("type=book", { orderBy: "-finished_at" });
+  // 304 books: a read book is dated by finished_at, else purchased_at (bulk-imported books only know when they were bought)
+  const books = q("type=book");
   const byStatus = group(books, (b) => b.status);
+  const read = (byStatus.read ?? []).sort((a, b) => bookDate(b.fm).localeCompare(bookDate(a.fm)) || a.title.localeCompare(b.title, "ja"));
+  const unrated = unratedImported(read);
   out(`${GOLD.books}/index.md`, [
     "# 読書", "",
-    `- 読了 ${byStatus.read?.length ?? 0} / 読書中 ${byStatus.reading?.length ?? 0} / 積読 ${byStatus.want?.length ?? 0}`, "",
+    `- 読了 ${read.length} / 読書中 ${byStatus.reading?.length ?? 0} / 積読 ${byStatus.want?.length ?? 0}`,
+    `- 未評価の読了本（取り込み分）: ${unrated.length} 冊`, "",
     "## 読書中", ...list(byStatus.reading ?? []),
     "", "## 読みたい", ...list(byStatus.want ?? []),
-    "", "## 読了（新しい順）", "", "| 書名 | 著者 | ジャンル | 評価 | 読了日 |", "|---|---|---|---|---|",
-    ...(byStatus.read ?? []).map((b) => `| ${link(b)} | ${b.fm.author ?? ""} | ${b.fm.genre ?? ""}${b.fm.subgenre ? "/" + b.fm.subgenre : ""} | ${stars(b.fm.rating)} | ${b.fm.finished_at ?? ""} |`),
+    "", "## 未評価の読了本", "",
+    "一括取り込み（`imported: true`）で `rating` の無い読了本。購入日の古い順に 5 冊。週次の `review` が「今週評価する本」に挙げ、評価と 1 行の summary は `log-book` で付ける。", "",
+    ...(unrated.length ? unrated.slice(0, 5).map((b) => `- ${link(b)} — ${b.fm.author ?? ""}${b.fm.purchased_at ? `（${b.fm.purchased_at} 購入）` : ""}`) : ["- （なし）"]),
+    ...(unrated.length > 5 ? [`- …他 ${unrated.length - 5} 冊（\`kb query type=book status=read imported=true rating= --order purchased_at\`）`] : []),
+    "", "## 読了（新しい順）", "", "| 書名 | 著者 | ジャンル | 評価 | 読了日 | 購入日 |", "|---|---|---|---|---|---|",
+    ...read.map((b) => `| ${link(b)} | ${b.fm.author ?? ""} | ${b.fm.genre ?? ""}${b.fm.subgenre ? "/" + b.fm.subgenre : ""} | ${stars(b.fm.rating)} | ${b.fm.finished_at ?? ""} | ${b.fm.purchased_at ?? ""} |`),
   ].join("\n"));
-  for (const [year, items] of Object.entries(group(byStatus.read ?? [], (b) => String(b.fm.finished_at ?? "").slice(0, 4) || "unknown"))) {
-    out(`${GOLD.books}/${year}.md`, [`# 読書 ${year}`, "", `- ${items.length} 冊`, "", ...list(items.sort(byRating))].join("\n"));
+  for (const [year, items] of Object.entries(group(read, (b) => bookYear(b.fm)))) {
+    out(`${GOLD.books}/${year}.md`, [`# 読書 ${year}`, "", `- ${items.length} 冊${year === "unknown" ? "（読了日も購入日も無い本）" : ""}`, "", ...list(items.sort(byRating))].join("\n"));
   }
 
   // 305 media
@@ -287,7 +295,7 @@ function link(n: QueryResult): string {
   return `[${n.title}](../${p})`;
 }
 function list(items: QueryResult[]): string[] {
-  return items.length ? items.map((n) => `- ${link(n)}${n.summary ? " — " + n.summary : ""}`) : ["- （なし）"];
+  return items.length ? items.map((n) => `- ${link(n)}${n.summary && n.summary !== IMPORTED_SUMMARY ? " — " + n.summary : ""}`) : ["- （なし）"];
 }
 function group<T>(items: T[], key: (t: T) => string): Record<string, T[]> {
   const out: Record<string, T[]> = {};

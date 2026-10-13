@@ -3,7 +3,7 @@ import { join } from "node:path";
 import {
   loadConfig, openDb, indexNotes, SchemaRegistry, createNote, DuplicateError, patchFrontmatter, appendToSection,
   ingestFile, ingestUrl, sourceExcerpt, markProcessed, listInbox, parseFilters, runQuery, buildGold,
-  validateAll, archiveNote, lint, backupBronze, pruneBronze, logAccess, importPortfolio, importHealth, importLocation, importCalendar, runCollectors, type BronzeKind,
+  validateAll, archiveNote, lint, backupBronze, pruneBronze, logAccess, importPortfolio, importHealth, importLocation, importCalendar, importKoboLibrary, runCollectors, type BronzeKind,
   search, VectorStore, embedNotes, makeEmbedder, setupLindera, linderaStatus, resolveTokenizer, readVectorMeta, type SearchMode,
 } from "@kb/core";
 
@@ -268,6 +268,15 @@ switch (cmd) {
     console.log(`${r.created ? "created" : "updated"} ${r.path} (as of ${r.asOf}, ${r.positions} positions${r.bronzeId ? `, from ${r.bronzeId}` : ""})`);
     break;
   }
+  case "book": {
+    const { f, pos } = flags(argv);
+    const [sub, id] = pos;
+    if (sub !== "import" || !id) die("usage: kb book import <bronze-id> [--status want|read]   (a 楽天Kobo library export CSV)");
+    const r = importKoboLibrary(cfg, reg, db(), id!, { status: f.status ? String(f.status) : undefined });
+    for (const c of r.created) console.log(`created ${c.path}`);
+    console.log(`${r.created.length} created, ${r.skipped.length} already in 204_books (from ${r.bronzeId})`);
+    break;
+  }
   case "root": {
     console.log(cfg.root);
     break;
@@ -329,6 +338,7 @@ switch (cmd) {
   location import <bronze-id> [--max-lookups 300] [--all]   Google Maps Timeline export → monthly location_log (Places API, 70-day cache)
   collect [source...] [--dry-run]    run collectors into 000_inbox (secrets: use \`bun run collect\` with apps/collector/.env)
   portfolio import <csv|bronze-id> [--account 楽天証券]   update the portfolio note from a 楽天証券 asset CSV (CP932 ok)
+  book import <bronze-id> [--status want|read]   book notes (imported: true, purchased_at) from a 楽天Kobo library export CSV; existing titles are skipped
   query [type=book rating>=4] [--text "..."] [--include-archive] [--json] [--limit n] [--order -updated]
   search "<query>" [type=book ...] [--mode hybrid|vector|keyword] [--limit 10] [--include-archive] [--spoilers] [--json]
                                      semantic + keyword search (LanceDB; Ollama for vectors). ● high / ○ low confidence

@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { KbConfig } from "./config";
 import { bronzeDir, walkBronze } from "./bronze";
@@ -18,6 +18,18 @@ export async function backupBronze(cfg: KbConfig, opts: { dest?: string; dryRun?
   mkdirSync(cfg.logs, { recursive: true });
   appendFileSync(join(cfg.logs, "backup.log"), `[${new Date().toISOString()}] ${opts.dryRun ? "DRY " : ""}-> ${dest}\n${out}\n`);
   return { dest, output: out };
+}
+
+/** When `kb backup` last really ran (dry runs do not count), from backup.log; null when it never did. */
+export function lastBackupAt(cfg: KbConfig): Date | null {
+  const p = join(cfg.logs, "backup.log");
+  if (!existsSync(p)) return null;
+  let last: Date | null = null;
+  for (const m of readFileSync(p, "utf8").matchAll(/^\[([^\]]+)\] -> /gm)) {
+    const d = new Date(m[1]!);
+    if (!Number.isNaN(d.getTime())) last = d;
+  }
+  return last;
 }
 
 /** Remove raw files (not meta.json) of old, already-processed Bronze items of a kind. */

@@ -8,7 +8,8 @@ import { createHttp, type HttpClient } from "./http";
 import { COLLECTORS } from "./registry";
 import type { Collector, CollectResult, Env, Feed, Logger } from "./types";
 
-export interface SourceState { cursor?: string; lastTo?: string; lastRunAt?: string; lastError?: string }
+/** `lastItems`: feed entries / files written by the last successful run (the morning digest reports it). */
+export interface SourceState { cursor?: string; lastTo?: string; lastRunAt?: string; lastError?: string; lastItems?: number }
 export type CollectState = Record<string, SourceState>;
 
 export interface SourceReport {
@@ -93,7 +94,7 @@ export async function runCollectors(cfg: KbConfig, env: Env, opts: RunOpts = {})
       for (const file of files) (writeInbox(cfg, file.name, file.json, !!opts.dryRun) ? report.written : report.skippedExisting).push(file.name);
       if (!opts.dryRun) {
         await res.commit?.();
-        state[c.id] = { cursor: res.cursor ?? st.cursor, lastTo: (res.to ?? to).toISOString(), lastRunAt: now.toISOString() };
+        state[c.id] = { cursor: res.cursor ?? st.cursor, lastTo: (res.to ?? to).toISOString(), lastRunAt: now.toISOString(), lastItems: report.items };
       }
       return report;
     } catch (e) {

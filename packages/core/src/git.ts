@@ -1,9 +1,12 @@
 /** Thin git helpers used by the API pod and the worker. All run in `cwd`. */
 export async function git(cwd: string, ...args: string[]): Promise<string> {
+  return (await gitRaw(cwd, args)).trim();
+}
+async function gitRaw(cwd: string, args: string[]): Promise<string> {
   const proc = Bun.spawn(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
   const [out, err] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
   if ((await proc.exited) !== 0) throw new Error(`git ${args.join(" ")}: ${err.trim()}`);
-  return out.trim();
+  return out;
 }
 
 /** HEAD sha, or "" for a repo with no commits yet. */
@@ -37,6 +40,13 @@ async function pullRebase(cwd: string) {
 export async function gitChangedFiles(cwd: string, from: string, to: string): Promise<string[]> {
   if (!from || !to || from === to) return [];
   return (await git(cwd, "diff", "--name-only", "--no-renames", from, to)).split("\n").filter(Boolean);
+}
+
+/** `git status --porcelain` of the given paths: two-letter status + repo-relative path (untracked = `??`). */
+export async function gitStatusPaths(cwd: string, paths: string[]): Promise<{ status: string; path: string }[]> {
+  // raw: a modified-in-worktree entry starts with a space (" M"), which git()'s trim would eat
+  const out = await gitRaw(cwd, ["status", "--porcelain", "-z", "--untracked-files=all", "--", ...paths]);
+  return out.split("\0").filter((e) => e.length > 3).map((e) => ({ status: e.slice(0, 2), path: e.slice(3) }));
 }
 
 /** Local commits not on the upstream yet (0 without an upstream). */

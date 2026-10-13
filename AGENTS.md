@@ -13,7 +13,7 @@
 | `apps/worker` | API のジョブ（ingest / ask / recommend / search）を long-poll してエージェント CLI や core で処理 | Mac |
 | `apps/collector` | Bronze collector。GitHub・Gmail・Google カレンダー・YouTube・Google Health・LinkedIn エクスポート ZIP を取得して `000_inbox` に JSON で置く（`bun run collect`、launchd で毎朝）。秘密は `apps/collector/.env`。ロジックは `packages/core/src/collect` | Mac |
 | `apps/api` | Hono の HTTP API。Cloudflare Access（JWT）で認証。principal は `user`（WebUI）/ `worker`（Mac、`/api/worker/*` と `POST /api/jobs`）/ `service`（Gmail の Apps Script、`POST /api/inbox` のみ）。ジョブキューは SQLite | k8s |
-| `apps/web` | React + Vite の WebUI。`public/sw.js` は Web Push 専用の Service Worker（オフラインキャッシュなし）。通知は API の `/api/push/*` と worker のジョブ完了（`notifyJobDone`）から送る | k8s（API が配信） |
+| `apps/web` | React + Vite の WebUI。`public/sw.js` は Web Push 専用の Service Worker（オフラインキャッシュなし）。通知（ジョブ失敗・朝の運用ダイジェスト・売買シート）は API の `/api/worker/jobs/:id/done` から送る（`docs/collect.md` の「通知」） | k8s（API が配信） |
 | `deploy/` | Dockerfile・Helm chart（`helm/kb-api`）・Argo CD Application・手順（`deploy/README.md`） | — |
 | `docs/` | 設計メモ（`search.md` = 検索の設計と運用、`collect.md` = collector の設計と運用） | — |
 

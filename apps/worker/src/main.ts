@@ -4,8 +4,11 @@
  * with the agent CLI chosen by KB_AGENT (claude|codex|gemini). Never exposes a port.
  */
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { LAYOUT, SILVER_PREFIX, loadConfig, git, gitCommitPush, openDb, indexNotes, parseFilters, search, makeEmbedder, type SearchMode } from "@kb/core";
+import { basename, join } from "node:path";
+import {
+  LAYOUT, SILVER_PREFIX, loadConfig, git, gitCommitPush, gitStatusPaths, hasUpstream, openDb, indexNotes, parseFilters, search, makeEmbedder, listInbox,
+  clipError, errorHead, buildOpsDigest, formatOpsDigest, renderOpsDigest, type SearchMode,
+} from "@kb/core";
 
 const API = (process.env.KB_API_URL ?? "http://127.0.0.1:8787").replace(/\/$/, "");
 const cfg = loadConfig(process.env.KB_ROOT);
@@ -15,14 +18,19 @@ if (process.env.CF_ACCESS_CLIENT_ID) {
   headers["CF-Access-Client-Id"] = process.env.CF_ACCESS_CLIENT_ID;
   headers["CF-Access-Client-Secret"] = process.env.CF_ACCESS_CLIENT_SECRET ?? "";
 }
-import { hasUpstream } from "@kb/core";
+/** worker.log lines carry a timestamp; API errors are clipped to the status and the head of the body (never a whole Cloudflare error page). */
+const stamp = () => new Date().toISOString().replace("T", " ").slice(0, 19);
+const info = (m: string) => console.log(`${stamp()} ${m}`);
+const warn = (m: string) => console.error(`${stamp()} ${m}`);
+/** Sent while a job runs so the API's requeueStale sees a live worker even when the agent prints nothing for minutes. */
+const HEARTBEAT_MS = 30_000;
 
 interface Job { id: string; kind: string; payload: string; inbox?: { id: string; kind: "url" | "text" | "file"; name: string }[] }
 
 async function api(path: string, init: RequestInit = {}) {
   const res = await fetch(`${API}/api/worker${path}`, { ...init, headers: { ...headers, ...(init.headers as Record<string, string> ?? {}) } });
   if (res.status === 204) return null;
-  if (!res.ok) throw new Error(`${path}: ${res.status} ${await res.text()}`);
+  if (!res.ok) throw new Error(`${path}: ${res.status} ${clipError(await res.text())}`);
   return res;
 }
 const log = (id: string, text: string) => api(`/jobs/${id}/log`, { method: "POST", body: text, headers: { "content-type": "text/plain" } }).catch(() => {});
@@ -72,7 +80,16 @@ let embedder: ReturnType<typeof makeEmbedder> | undefined;
 
 async function handle(job: Job) {
   const payload = JSON.parse(job.payload || "{}") as Record<string, unknown>;
-  console.log(`[job ${job.id.slice(0, 8)}] ${job.kind}`);
+  info(`[job ${job.id.slice(0, 8)}] ${job.kind}${payload.scheduled ? " (scheduled)" : ""}`);
+  const heartbeat = job.kind === "search" ? null : setInterval(() => api(`/jobs/${job.id}/heartbeat`, { method: "POST" }).catch(() => {}), HEARTBEAT_MS);
+  try {
+    await run(job, payload);
+  } finally {
+    if (heartbeat) clearInterval(heartbeat);
+  }
+}
+
+async function run(job: Job, payload: Record<string, unknown>) {
   if (job.kind !== "search" && (await hasUpstream(cfg.root))) await git(cfg.root, "pull", "--rebase", "--quiet").catch((e) => log(job.id, `pull: ${e.message}\n`));
   let body: Record<string, unknown>;
   try {
@@ -88,17 +105,30 @@ async function handle(job: Job) {
           mode: (payload.mode as SearchMode | undefined) ?? "hybrid", filters,
           includeArchive: !!payload.includeArchive, limit: Number(payload.limit ?? 20),
         }, { embedder });
-        console.log(`[job ${job.id.slice(0, 8)}] search "${String(payload.query ?? "").slice(0, 40)}" -> ${res.hits.length} hits (${res.mode}${res.degraded ? ", degraded: " + res.degraded : ""}) ${Date.now() - t0}ms`);
+        info(`[job ${job.id.slice(0, 8)}] search "${String(payload.query ?? "").slice(0, 40)}" -> ${res.hits.length} hits (${res.mode}${res.degraded ? ", degraded: " + res.degraded : ""}) ${Date.now() - t0}ms`);
         body = { ok: true, result: res };
         break;
       }
       case "ingest": {
         await stageInbox(job);
+        // The scheduled (launchd 07:00) ingest ends with one ops digest push: note what was waiting before the agent eats it.
+        const scheduled = !!payload.scheduled;
+        const inboxNames = scheduled ? listInbox(cfg).map((p) => basename(p)) : [];
         const { out, code } = await runAgent(job.id, ["ingest"]);
         await kb("validate", "--quiet").catch((e) => log(job.id, `${e.message}\n`));
         await kb("build");
+        const changes = scheduled ? await gitStatusPaths(cfg.root, [LAYOUT.silver]).catch(() => []) : [];
         const commit = await commitAll(`ingest: ${(job.inbox ?? []).map((i) => i.name).join(", ") || "inbox"}`);
         body = { ok: code === 0, result: { summary: tail(out) }, commit };
+        if (scheduled) {
+          try {
+            const digest = buildOpsDigest(cfg, { inboxNames, agentOutput: out, agentOk: code === 0, changes });
+            (body.result as Record<string, unknown>).digest = renderOpsDigest(digest);
+            body.notify = formatOpsDigest(digest);
+          } catch (e) {
+            warn(`[job ${job.id.slice(0, 8)}] digest: ${(e as Error).message}`);
+          }
+        }
         break;
       }
       case "ask": {
@@ -126,7 +156,7 @@ async function handle(job: Job) {
     body = { ok: false, result: { error: (e as Error).message } };
   }
   await api(`/jobs/${job.id}/done`, { method: "POST", body: JSON.stringify(body) });
-  console.log(`[job ${job.id.slice(0, 8)}] ${body.ok ? "done" : "FAILED"}`);
+  info(`[job ${job.id.slice(0, 8)}] ${body.ok ? "done" : `FAILED: ${errorHead(body.result, 200)}`}`);
 }
 
 function tail(s: string, n = 2000) { return s.length > n ? "…" + s.slice(-n) : s; }
@@ -145,11 +175,11 @@ async function lane(kinds: string) {
       const res = await api(`/jobs/next?wait=25&kinds=${kinds}`);
       if (res) await handle((await res.json()) as Job);
     } catch (e) {
-      console.error(`worker[${kinds}]:`, (e as Error).message);
+      warn(`worker[${kinds}]: ${(e as Error).message}`);
       await Bun.sleep(5000);
     }
   }
 }
 
-console.log(`kb worker: api=${API} kb=${cfg.root} agent=${process.env.KB_AGENT ?? "claude"}`);
+info(`kb worker: api=${API} kb=${cfg.root} agent=${process.env.KB_AGENT ?? "claude"}`);
 await Promise.all([lane("search"), lane("ingest,ask,recommend,skill")]);

@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { git, gitChangedFiles, gitCommit, gitHead, gitPull, gitPush, gitUnpushed } from "./git";
+import { git, gitChangedFiles, gitCommit, gitHead, gitPull, gitPush, gitStatusPaths, gitUnpushed } from "./git";
 
 async function clone(remote: string, name: string) {
   const dir = join(remote, "..", name);
@@ -44,5 +44,23 @@ describe("gitCommit / gitPush", () => {
 
     const pulled = await gitPull(b, { rebase: true });
     expect(await gitChangedFiles(b, pulled.before, pulled.after)).toEqual(["y.md"]);
+  });
+});
+
+describe("gitStatusPaths", () => {
+  test("untracked, modified (worktree) and non-ASCII names, limited to the given paths", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "kb-git-status-"));
+    await git(dir, "init", "--quiet", "-b", "main");
+    await git(dir, "config", "user.email", "t@local");
+    await git(dir, "config", "user.name", "t");
+    mkdirSync(join(dir, "200_silver"), { recursive: true });
+    mkdirSync(join(dir, "300_gold"), { recursive: true });
+    writeFileSync(join(dir, "200_silver", "既存.md"), "a\n");
+    await gitCommit(dir, ["200_silver"], "init");
+    writeFileSync(join(dir, "200_silver", "既存.md"), "b\n");
+    writeFileSync(join(dir, "200_silver", "新規.md"), "n\n");
+    writeFileSync(join(dir, "300_gold", "x.md"), "g\n");
+    const r = await gitStatusPaths(dir, ["200_silver"]);
+    expect(r.sort((x, y) => x.status.localeCompare(y.status))).toEqual([{ status: " M", path: "200_silver/既存.md" }, { status: "??", path: "200_silver/新規.md" }]);
   });
 });

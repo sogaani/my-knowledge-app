@@ -9,6 +9,8 @@ export type JobStatus = "queued" | "running" | "done" | "failed";
 export interface Job {
   id: string; kind: JobKind; status: JobStatus; payload: string; result: string | null; log: string;
   commit: string | null; created_at: string; started_at: string | null; finished_at: string | null;
+  /** Last sign of life from the worker (claim, log line or explicit heartbeat); requeueStale keys off it. */
+  heartbeat_at: string | null;
 }
 export interface InboxItem { id: string; job_id: string; kind: "url" | "text" | "file"; name: string; path: string | null; url: string | null; text: string | null; created_at: string; fetched: number }
 export interface PushSubscriptionRow { endpoint: string; json: string; email: string | null; user_agent: string | null; created_at: string }
@@ -34,6 +36,8 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
   endpoint TEXT PRIMARY KEY, json TEXT NOT NULL, email TEXT, user_agent TEXT, created_at TEXT NOT NULL
 );
 `);
+// added after the first release: older jobs.sqlite files lack the column
+if (!(store.query("PRAGMA table_info(jobs)").all() as { name: string }[]).some((c) => c.name === "heartbeat_at")) store.exec("ALTER TABLE jobs ADD COLUMN heartbeat_at TEXT");
 
 const now = () => new Date().toISOString();
 export const newId = () => crypto.randomUUID();
@@ -55,11 +59,11 @@ export function createJob(kind: JobKind, payload: unknown, id = newId()): Job {
   return getJob(id)!;
 }
 export function getJob(id: string): Job | null {
-  const r = store.query("SELECT id,kind,status,payload,result,log,commit_sha AS 'commit',created_at,started_at,finished_at FROM jobs WHERE id=?").get(id) as Job | null;
+  const r = store.query("SELECT id,kind,status,payload,result,log,commit_sha AS 'commit',created_at,started_at,finished_at,heartbeat_at FROM jobs WHERE id=?").get(id) as Job | null;
   return r;
 }
 export function listJobs(limit = 50): Job[] {
-  return store.query("SELECT id,kind,status,payload,result,log,commit_sha AS 'commit',created_at,started_at,finished_at FROM jobs WHERE kind != 'search' ORDER BY created_at DESC LIMIT ?").all(limit) as Job[];
+  return store.query("SELECT id,kind,status,payload,result,log,commit_sha AS 'commit',created_at,started_at,finished_at,heartbeat_at FROM jobs WHERE kind != 'search' ORDER BY created_at DESC LIMIT ?").all(limit) as Job[];
 }
 /** Search jobs are ephemeral: drop finished ones after a while so the queue table stays small. */
 export function pruneSearchJobs(maxMinutes = 60) {
@@ -71,22 +75,32 @@ export function claimNextJob(kinds?: string[]): Job | null {
     const only = kinds?.length ? ` AND kind IN (${kinds.map(() => "?").join(",")})` : "";
     const j = store.query(`SELECT id FROM jobs WHERE status='queued'${only} ORDER BY created_at LIMIT 1`).get(...(kinds ?? [])) as { id: string } | null;
     if (!j) return null;
-    store.run("UPDATE jobs SET status='running', started_at=? WHERE id=?", [now(), j.id]);
+    const t = now();
+    store.run("UPDATE jobs SET status='running', started_at=?, heartbeat_at=? WHERE id=?", [t, t, j.id]);
     return getJob(j.id);
   });
   return tx();
 }
 export function appendJobLog(id: string, text: string) {
-  store.run("UPDATE jobs SET log = log || ? WHERE id=?", [text, id]);
+  store.run("UPDATE jobs SET log = log || ?, heartbeat_at=? WHERE id=?", [text, now(), id]);
+}
+/** The worker is still on it (sent every 30 s while a job runs, since `claude -p` prints nothing until the end). */
+export function touchJob(id: string) {
+  store.run("UPDATE jobs SET heartbeat_at=? WHERE id=? AND status='running'", [now(), id]);
 }
 export function finishJob(id: string, ok: boolean, result: unknown, commit?: string | null) {
   store.run("UPDATE jobs SET status=?, result=?, commit_sha=?, finished_at=? WHERE id=?", [ok ? "done" : "failed", JSON.stringify(result ?? null), commit ?? null, now(), id]);
   jobEvents.emit(`done:${id}`);
 }
-/** Re-queue jobs stuck in running for too long (worker died). */
-export function requeueStale(maxMinutes = 60) {
-  const r = store.run("UPDATE jobs SET status='queued', started_at=NULL WHERE status='running' AND started_at < ?", [new Date(Date.now() - maxMinutes * 60000).toISOString()]);
+/**
+ * Re-queue running jobs whose worker went silent (died, or lost the API) for `maxMinutes`. Silence is measured from the
+ * last heartbeat / log line, not from the start, so a long skill run that keeps reporting is never run twice.
+ * Jobs claimed by a worker that never sent a heartbeat (older worker) fall back to their start time.
+ */
+export function requeueStale(maxMinutes = 15, nowMs = Date.now()): number {
+  const r = store.run("UPDATE jobs SET status='queued', started_at=NULL, heartbeat_at=NULL WHERE status='running' AND COALESCE(heartbeat_at, started_at) < ?", [new Date(nowMs - maxMinutes * 60000).toISOString()]);
   if (r.changes) jobEvents.emit("queued");
+  return r.changes;
 }
 
 export function addInboxItem(it: Omit<InboxItem, "created_at" | "fetched">) {

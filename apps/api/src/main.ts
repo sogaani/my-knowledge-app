@@ -4,17 +4,17 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import {
   runQuery, parseFilters, readNote, patchFrontmatter, createNote, DuplicateError, extractLinks,
-  keywordSearch, monthlyByCurrency, LAYOUT, GOLD, SILVER_PREFIX, GOLD_PREFIX, type SearchResponse, type SearchMode,
+  keywordSearch, monthlyByCurrency, errorHead, LAYOUT, GOLD, SILVER_PREFIX, GOLD_PREFIX, type SearchResponse, type SearchMode,
 } from "@kb/core";
 import { env } from "./env";
 import { authenticate, requireUser, requireWorker, requireInboxWriter, requireUserOrWorker, type Principal } from "./auth";
 import { cfg, reg, db, sync, head, rebuildGold, commitKb, cachedLint, pushState, unsavedCount, isGitRepo } from "./kb";
 import {
-  createJob, getJob, listJobs, claimNextJob, appendJobLog, finishJob, requeueStale, pruneSearchJobs, waitJobEvent,
+  createJob, getJob, listJobs, claimNextJob, appendJobLog, touchJob, finishJob, requeueStale, pruneSearchJobs, waitJobEvent,
   addInboxItem, inboxItemNameExists, inboxItemsForJob, getInboxItem, markInboxFetched, addChat, listChat, newId, type JobKind,
   addPushSubscription, deletePushSubscription, listPushSubscriptions,
 } from "./store";
-import { pushEnabled, sendPushToAll } from "./push";
+import { pushEnabled, sendPushToAll, type PushPayload } from "./push";
 
 type Vars = { principal: Principal; timing: [string, number][] };
 const app = new Hono<{ Variables: Vars }>();
@@ -265,10 +265,12 @@ api.post("/inbox", requireInboxWriter, async (c) => {
 
 api.get("/jobs", requireUser, (c) => c.json(listJobs(Number(c.req.query("limit") ?? 50))));
 api.get("/jobs/:id", requireUser, (c) => { const j = getJob(c.req.param("id") ?? ""); return j ? c.json(j) : c.json({ error: "not found" }, 404); });
+/** Jobs queued with the worker credentials come from launchd (enqueue.sh): marked `scheduled` so the worker knows to send the morning digest. */
 api.post("/jobs", requireUserOrWorker, async (c) => {
   const b = (await c.req.json()) as { kind: JobKind; payload?: unknown };
   if (!["ingest", "ask", "recommend", "skill"].includes(b.kind)) return c.json({ error: "bad kind" }, 400);
-  return c.json(createJob(b.kind, b.payload ?? {}));
+  const payload = b.payload && typeof b.payload === "object" ? (b.payload as Record<string, unknown>) : {};
+  return c.json(createJob(b.kind, c.get("principal").kind === "worker" ? { ...payload, scheduled: true } : payload));
 });
 
 api.get("/chat", requireUser, (c) => c.json(listChat()));
@@ -311,17 +313,30 @@ w.get("/inbox/:id", (c) => {
   return c.json({ url: it.url });
 });
 w.post("/jobs/:id/log", async (c) => { appendJobLog(c.req.param("id") ?? "", await c.req.text()); return c.json({ ok: true }); });
+w.post("/jobs/:id/heartbeat", (c) => { touchJob(c.req.param("id") ?? ""); return c.json({ ok: true }); });
+/**
+ * Job finished. Pushes (when VAPID is configured): a failure (any kind but search), the `notify` the worker attached
+ * (the morning digest after a scheduled ingest), and the trade-plan sheet (notifyJobDone).
+ */
 w.post("/jobs/:id/done", async (c) => {
   const id = c.req.param("id") ?? "";
-  const b = (await c.req.json()) as { ok: boolean; result?: unknown; commit?: string | null; answer?: string; sources?: string[] };
+  const b = (await c.req.json()) as { ok: boolean; result?: unknown; commit?: string | null; answer?: string; sources?: string[]; notify?: PushPayload };
   finishJob(id, b.ok, b.result ?? b.answer ?? null, b.commit);
   const job = getJob(id);
   if (job?.kind === "ask") addChat("assistant", b.ok ? (b.answer ?? "") : `失敗: ${JSON.stringify(b.result)}`, id, b.sources ?? []);
   if (b.commit) await sync(`job:${id}`);
   else if (b.ok && job?.kind !== "ask" && job?.kind !== "search") await sync(`job:${id}`);
-  if (b.ok && job) notifyJobDone(job.kind, JSON.parse(job.payload) as Record<string, unknown>).catch((e) => console.error("push:", e));
+  if (job) {
+    const payload = JSON.parse(job.payload) as Record<string, unknown>;
+    const pushes: PushPayload[] = [];
+    if (!b.ok && job.kind !== "search") pushes.push({ title: `ジョブ失敗: ${jobLabel(job.kind, payload)}`, body: `${id.slice(0, 8)} · ${errorHead(b.result) || "(no error text)"}`, url: "/jobs", tag: `job-failed-${id}` });
+    if (b.notify?.title) pushes.push({ url: "/jobs", tag: "ops-digest", ...b.notify, body: String(b.notify.body ?? "").slice(0, 1000) });
+    for (const p of pushes) sendPushToAll(p).then((r) => console.log(`push ${p.tag}: sent ${r.sent}, removed ${r.removed}, failed ${r.failed}`), (e) => console.error("push:", e));
+    if (b.ok) notifyJobDone(job.kind, payload).catch((e) => console.error("push:", e));
+  }
   return c.json({ ok: true });
 });
+const jobLabel = (kind: string, payload: Record<string, unknown>) => (kind === "skill" && payload.name ? `skill ${String(payload.name)}` : kind) + (payload.scheduled ? " (定期)" : "");
 /** Push notifications for jobs people wait for. trade-plan: only when today's (JST) sheet exists, so a 休場 run stays silent. */
 async function notifyJobDone(kind: string, payload: Record<string, unknown>) {
   if (!pushEnabled()) return;

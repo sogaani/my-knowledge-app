@@ -60,6 +60,24 @@ Google は「テスト」状態のアプリのリフレッシュトークンを�
 - 失効したまま実行すると、そのトークンを使うソースだけが `… expired or revoked (invalid_grant): run bun run collect auth …` で失敗し、他のソースは続行する。期間は前回の位置から取り直すので、取りこぼしは出ない（Gmail は未取得ラベル基準）。
 - 同意画面を「本番環境」に公開できたら `GOOGLE_TOKEN_TTL_DAYS=0` にして警告を止める。
 
+## 通知（Web Push）
+
+API に VAPID 鍵があるとき（`VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY`）、WebUI で購読したブラウザに次を送る。送るのは API（`POST /api/worker/jobs/:id/done`）で、worker は材料を渡すだけ。内容は件数・種別・エラーの先頭だけで、メールの件名・本文やトークンは含めない。
+
+| 通知 | 条件 | 内容 |
+|---|---|---|
+| `ジョブ失敗: <kind>` | `search` 以外のジョブが `ok:false` で終わったとき（agent の非 0 終了、`kb build` 失敗、例外） | ジョブ id の先頭 8 桁とエラーの先頭 140 文字（HTML は剥がす）。タップで `/jobs` |
+| `運用ダイジェスト M/D` | launchd の `daily-ingest`（07:00）が終わったとき 1 通。`enqueue.sh` は worker の資格情報で `POST /api/jobs` するので API がペイロードに `scheduled: true` を付け、worker はそれを見てダイジェストを組み立てる（WebUI から投げた ingest には付かない） | 収集: ソース別の件数（`collect-state.json` の `lastItems`）・失敗・36 時間以上走っていないソース / ノート: 新規・更新数（コミット前の `git status` の Silver）・未処理 Bronze 数・最終バックアップからの日数（`backup.log`、無ければ「未実施」）/ agent の「判断に迷った点」の件数と 1 つ目。全文はジョブの結果（`result.digest`）に入り、Jobs ページで読める。ingest が失敗したときは題名に `[失敗]` |
+| `本日の売買シート` | `trade-plan` スキルが当日のシートを作ったとき（従来どおり） | — |
+
+ダイジェストの組み立ては `packages/core/src/ops.ts`（`buildOpsDigest` / `formatOpsDigest`）。collector 側は `runCollectors` が成功したソースの `lastItems` を `collect-state.json` に残す。
+
+### worker の死活
+
+- worker は `search` 以外のジョブを実行中、30 秒ごとに `POST /api/worker/jobs/:id/heartbeat` を送る（`claude -p` は終わるまで何も出力しないので、進捗ログだけでは生存が分からない）。進捗ログ（`/log`）も heartbeat 扱い。
+- API の `requeueStale` は「最後の heartbeat から 15 分」無音のジョブを `queued` に戻す（以前は開始から 60 分固定）。長い skill ジョブでも報告が続く限り二重実行されない。heartbeat を送らない古い worker が掴んだジョブは開始時刻で判定される。
+- `worker.log` の各行には時刻が付く。API のエラーはステータスコードと本文の先頭 200 文字（HTML タグは剥がす）だけを記録する。
+
 ## ソースを足す
 
 1. `packages/core/src/collect/sources/<id>.ts` に `Collector` を実装する（`configured()`・`collect()`・`digest()`）。HTTP は `ctx.http`（リトライ込み）、Google API は `googleJson(ctx.http, ctx.google, url)`。

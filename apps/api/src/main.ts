@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import {
   runQuery, parseFilters, readNote, patchFrontmatter, createNote, DuplicateError, extractLinks,
-  keywordSearch, LAYOUT, GOLD, SILVER_PREFIX, GOLD_PREFIX, type SearchResponse, type SearchMode,
+  keywordSearch, monthlyByCurrency, LAYOUT, GOLD, SILVER_PREFIX, GOLD_PREFIX, type SearchResponse, type SearchMode,
 } from "@kb/core";
 import { env } from "./env";
 import { authenticate, requireUser, requireWorker, requireInboxWriter, requireUserOrWorker, type Principal } from "./auth";
@@ -51,14 +51,13 @@ api.get("/me", (c) => c.json({ principal: c.get("principal"), kbRoot: cfg.root }
 api.get("/home", requireUser, async (c) => {
   const counts = db.query("SELECT type, COUNT(*) c FROM notes WHERE archived=0 AND path LIKE ? GROUP BY type").all(`${SILVER_PREFIX}%`) as { type: string; c: number }[];
   const subs = runQuery(db, { filters: [{ field: "type", op: "=", value: "subscription" }, { field: "status", op: "=", value: "active" }], limit: 1000 });
-  const monthly = subs.reduce((a, s) => a + (s.fm.cycle === "yearly" ? Number(s.fm.price ?? 0) / 12 : Number(s.fm.price ?? 0)), 0);
   const recent = runQuery(db, { filters: [], orderBy: "-updated", limit: 12 }).filter((n) => n.path.startsWith(SILVER_PREFIX));
   const projects = runQuery(db, { filters: [{ field: "type", op: "=", value: "project" }, { field: "status", op: "=", value: "active" }], limit: 50 });
   const books = runQuery(db, { filters: [{ field: "type", op: "=", value: "book" }], limit: 5000 });
   const media = runQuery(db, { filters: [{ field: "type", op: "=", value: "media" }], limit: 5000 });
   const byStatus = (xs: typeof books) => xs.reduce<Record<string, number>>((a, x) => ((a[x.status] = (a[x.status] ?? 0) + 1), a), {});
   return c.json({
-    counts, monthlySubscriptions: Math.round(monthly), activeSubscriptions: subs.length,
+    counts, monthlySubscriptions: monthlyByCurrency(subs), activeSubscriptions: subs.length,
     books: byStatus(books), media: byStatus(media), projects, recent, jobs: listJobs(8),
     lint: await timed(c, "lint", cachedLint), head: head(), unpushed: unsavedCount(), pushError: pushState.error,
   });

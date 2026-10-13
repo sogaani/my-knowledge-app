@@ -5,6 +5,7 @@ import type { Database } from "bun:sqlite";
 import { GOLD, GOLD_PREFIX, today, type KbConfig } from "./config";
 import { runQuery, type QueryResult } from "./query";
 import { buildCrossViews } from "./views";
+import { currencyOf, formatMoney, formatTotals, monthlyByCurrency } from "./money";
 
 /** Regenerate every Gold markdown file from the index. Gold is derived; never hand-edited. */
 export function buildGold(cfg: KbConfig, db: Database): string[] {
@@ -21,10 +22,10 @@ export function buildGold(cfg: KbConfig, db: Database): string[] {
   // 302 subscriptions
   const subs = q("type=subscription");
   const active = subs.filter((s) => s.status === "active");
-  const monthly = active.reduce((a, s) => a + toMonthly(s.fm), 0);
+  const monthly = monthlyByCurrency(active); // per currency: yen and dollars are not added together
   out(GOLD.subscriptions, [
     "# サブスクリプション", "",
-    `- 有効: ${active.length} 件 / 月額換算 **¥${Math.round(monthly).toLocaleString()}** / 年額換算 ¥${Math.round(monthly * 12).toLocaleString()}`, "",
+    `- 有効: ${active.length} 件 / 月額換算 **${formatTotals(monthly)}** / 年額換算 ${formatTotals(monthly, 12)}`, "",
     "| サービス | プラン | 料金 | 周期 | 次回更新 | 状態 |", "|---|---|---|---|---|---|",
     ...subs.sort((a, b) => String(a.fm.next_renewal ?? "9").localeCompare(String(b.fm.next_renewal ?? "9")))
       .map((s) => `| ${link(s)} | ${s.fm.plan ?? ""} | ${money(s.fm)} | ${s.fm.cycle ?? ""} | ${s.fm.next_renewal ?? ""} | ${s.status} |`),
@@ -191,7 +192,7 @@ export function buildGold(cfg: KbConfig, db: Database): string[] {
     `- [ライフログ](${GOLD.daily}) — 直近 60 日を 1 日 1 行で`,
     `- [トレンド](${GOLD.trends}) — 月ごとの推移`,
     `- [これからの予定](${GOLD.upcoming}) — 90 日先までの予定・期限`,
-    `- [サブスクリプション](${GOLD.subscriptions}) — 月額換算 ¥` + Math.round(monthly).toLocaleString(),
+    `- [サブスクリプション](${GOLD.subscriptions}) — 月額換算 ${formatTotals(monthly)}`,
     `- [金融サービス](${GOLD.finance})`,
     `- [読書](${GOLD.books}/index.md) — 読了 ${byStatus.read?.length ?? 0}, 読書中 ${byStatus.reading?.length ?? 0}`,
     `- [映画・ドラマ](${GOLD.media}/index.md) — 視聴済み ${mByStatus.watched?.length ?? 0}`,
@@ -250,13 +251,9 @@ function stars(r: unknown): string {
 function byRating(a: QueryResult, b: QueryResult) {
   return Number(b.fm.rating ?? 0) - Number(a.fm.rating ?? 0);
 }
-function toMonthly(fm: Record<string, unknown>): number {
-  const p = Number(fm.price ?? 0);
-  return fm.cycle === "yearly" ? p / 12 : p;
-}
 function money(fm: Record<string, unknown>): string {
   const p = Number(fm.price ?? 0);
-  return p ? `${fm.currency === "JPY" || !fm.currency ? "¥" : fm.currency + " "}${p.toLocaleString()}` : "";
+  return p ? formatMoney(p, currencyOf(fm)) : "";
 }
 function renewalWarnings(active: QueryResult[]): string {
   const soon = active.filter((s) => {

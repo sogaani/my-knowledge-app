@@ -22,3 +22,4 @@ export * from "./location";
 export * from "./wallclock";
 export * from "./calendar";
 export * from "./views";
+export * from "./money";

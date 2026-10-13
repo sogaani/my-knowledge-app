@@ -8,7 +8,7 @@ export interface SearchHit { path: string; type: string; title: string; status: 
 export interface SearchResponse { hits: SearchHit[]; mode: "hybrid" | "vector" | "keyword"; degraded?: string; job?: string; queuedMs?: number | null; workerMs?: number | null }
 export interface TypeDef { type: string; folder: string; entity: string; statuses: string[]; fields: string[] }
 export interface Home {
-  counts: { type: string; c: number }[]; monthlySubscriptions: number; activeSubscriptions: number;
+  counts: { type: string; c: number }[]; monthlySubscriptions: { currency: string; amount: number }[]; // per currency, never summed across activeSubscriptions: number;
   books: Record<string, number>; media: Record<string, number>; projects: NoteSummary[]; recent: NoteSummary[]; jobs: Job[];
   lint: Record<string, string[]>; head: string; unpushed?: number; pushError?: string | null;
 }

@@ -4,6 +4,7 @@ import { api, type Home as HomeData } from "@/api";
 import { Chip, Err, Loading, NoteLink, PageTitle, Section, Status } from "@/components/common";
 import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
+import { formatTotals } from "@/lib/utils";
 import { typeLabel } from "../App";
 
 const Stat = ({ big, sub, to, link }: { big: React.ReactNode; sub: React.ReactNode; to: string; link: string }) => (
@@ -28,7 +29,7 @@ export default function Home() {
     <>
       <PageTitle>ホーム</PageTitle>
       <div className="grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-3">
-        <Stat big={`¥${d.monthlySubscriptions.toLocaleString()}`} sub={`サブスク 月額換算（${d.activeSubscriptions} 件）`} to="/notes/subscription" link="一覧" />
+        <Stat big={formatTotals(d.monthlySubscriptions)} sub={`サブスク 月額換算（${d.activeSubscriptions} 件）`} to="/notes/subscription" link="一覧" />
         <Stat big={d.books.read ?? 0} sub={`読了 / 読書中 ${d.books.reading ?? 0} / 積読 ${d.books.want ?? 0}`} to="/notes/book" link="読書" />
         <Stat big={d.media.watched ?? 0} sub={`視聴済み / 視聴中 ${d.media.watching ?? 0} / 観たい ${d.media.want ?? 0}`} to="/notes/media" link="映画・ドラマ" />
         <Stat big={d.projects.length} sub="進行中プロジェクト" to="/notes/project" link="一覧" />

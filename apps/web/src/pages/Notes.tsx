@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useAction } from "@/lib/useAction";
+import { formatMoney } from "@/lib/utils";
 import { typeLabel } from "../App";
 
 const COLUMNS: Record<string, { key: string; label: string }[]> = {
@@ -136,4 +137,4 @@ export default function Notes() {
     </>
   );
 }
-const fmtPrice = (fm: Record<string, unknown>) => fm.price ? `¥${Number(fm.price).toLocaleString()}` : "";
+const fmtPrice = (fm: Record<string, unknown>) => (fm.price ? formatMoney(Number(fm.price), String(fm.currency ?? "").trim().toUpperCase() || "JPY") : "");

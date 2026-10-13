@@ -1,11 +1,12 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
-import { basename, dirname, join, relative } from "node:path";
+import { basename, dirname, join, posix, relative } from "node:path";
 import type { Database } from "bun:sqlite";
 import { SILVER_PREFIX, WORK_FOLDER, isEncryptedPath, today, type KbConfig } from "./config";
 import { parseNote, stringifyNote } from "./frontmatter";
 import { walkNotes, type Note } from "./notes";
 import type { SchemaRegistry } from "./schema";
 import { listInbox, mailCategory, processState, readMeta, rewriteProcessedTo, walkBronze, type ProcessState } from "./bronze";
+import { SUGGESTION_SOURCE_PREFIX, relLink, suggestionIds } from "./suggest";
 
 export interface Issue { level: "error" | "warn"; path: string; msg: string }
 
@@ -16,6 +17,7 @@ export function validateAll(cfg: KbConfig, reg: SchemaRegistry): Issue[] {
   const issues: Issue[] = [];
   const notes = [...walkNotes(cfg, { dirs: [cfg.silver] })];
   const paths = new Set(notes.map((n) => n.path));
+  const suggestions = suggestionIds(cfg, notes);
   for (const n of notes) {
     for (const e of reg.validate(n.fm)) issues.push({ level: "error", path: n.path, msg: e });
     const def = reg.get(n.type);
@@ -23,15 +25,27 @@ export function validateAll(cfg: KbConfig, reg: SchemaRegistry): Issue[] {
       issues.push({ level: "error", path: n.path, msg: `type ${n.type} belongs in ${def.folder}/` });
     }
     if (!n.summary) issues.push({ level: "warn", path: n.path, msg: "summary is empty" });
+    // lifecycle: a merged / superseded note names its successor (a note-relative path, like `related`), and the successor exists
+    const successor = supersededBy(n);
+    if (successor) {
+      if (successor.abs && !paths.has(successor.rel) && !existsSync(join(cfg.root, successor.rel))) issues.push({ level: "error", path: n.path, msg: `superseded_by does not exist: ${successor.raw}` });
+      else if (!successor.abs) issues.push({ level: "error", path: n.path, msg: `superseded_by must be a path relative to the note (like related): ${successor.raw}` });
+    } else if (n.status === "merged") issues.push({ level: "warn", path: n.path, msg: "status merged but superseded_by is empty (where did it go?)" });
     const plaintext = !isEncryptedPath(n.path);
     for (const dst of linksOf(n)) {
+      if (dst === successor?.rel) continue; // reported above
       if (!paths.has(dst) && !existsSync(join(cfg.root, dst))) issues.push({ level: "error", path: n.path, msg: `broken link: ${dst}` });
       // a plaintext note that links into a git-crypt domain tends to carry its content along (title, summary): keep to counts / aggregates
       if (plaintext && isEncryptedPath(dst)) issues.push({ level: "warn", path: n.path, msg: `plaintext note links into encrypted domain: ${dst} (refer by count / aggregate only)` });
     }
     for (const s of (n.fm.sources as string[] | undefined) ?? []) {
       if (/^https?:/.test(s)) continue;
-      if (!/^\d{8}-[a-z]+-[0-9a-f]{6}$/.test(s)) issues.push({ level: "error", path: n.path, msg: `sources entry is not a Bronze ID or URL: ${s}` });
+      if (s.startsWith(SUGGESTION_SOURCE_PREFIX)) {
+        // a note made from a suggestion: the id must still be in some recommendation note (archived ones count)
+        if (!suggestions.has(s.slice(SUGGESTION_SOURCE_PREFIX.length))) issues.push({ level: "error", path: n.path, msg: `sources entry names an unknown suggestion id: ${s}` });
+        continue;
+      }
+      if (!/^\d{8}-[a-z]+-[0-9a-f]{6}$/.test(s)) issues.push({ level: "error", path: n.path, msg: `sources entry is not a Bronze ID, URL or suggestion:<id>: ${s}` });
       else if (!readMeta(cfg, s)) issues.push({ level: "warn", path: n.path, msg: `Bronze ${s} not present on this machine` });
     }
     const text = readFileSync(n.absPath, "utf8");
@@ -68,26 +82,55 @@ function linksOf(n: Note): string[] {
   return extractLinks(n);
 }
 
-/** Move a Silver note (or folder entity) into its domain's _archive/ and rewrite inbound links and Bronze processed_to. */
-export function archiveNote(cfg: KbConfig, relPath: string, opts: { status?: string } = {}): { from: string; to: string; rewritten: string[]; rewrittenBronze: string[] } {
+/** `superseded_by` of a note resolved to a repo-relative path (`abs` false when it is not a note-relative path). */
+function supersededBy(n: Note): { raw: string; rel: string; abs: boolean } | null {
+  const raw = n.fm.superseded_by;
+  if (typeof raw !== "string" || !raw) return null;
+  const ok = !raw.startsWith("/") && !raw.startsWith(SILVER_PREFIX) && !/^https?:/.test(raw);
+  return { raw, rel: ok ? posix.normalize(posix.join(posix.dirname(n.path), raw)) : raw, abs: ok };
+}
+
+export interface ArchiveOpts {
+  /** Final status written into the note (required: an archived note says why it ended). */
+  status: string;
+  /** Repo-relative path of the note this one was merged into / replaced by; written as a note-relative `superseded_by`. */
+  supersededBy?: string;
+  /** When given, `status` must be one of the type's statuses (and `supersededBy` must exist) before anything moves. */
+  reg?: SchemaRegistry;
+}
+
+/**
+ * Move a Silver note (or folder entity) into its domain's _archive/, set its final status (and successor), and rewrite
+ * inbound links and Bronze processed_to.
+ */
+export function archiveNote(cfg: KbConfig, relPath: string, opts: ArchiveOpts): { from: string; to: string; rewritten: string[]; rewrittenBronze: string[] } {
+  if (!opts?.status) throw new Error("status required: an archived note must say why it ended (done / cancelled / merged / closed …)");
   let abs = join(cfg.root, relPath);
   if (!existsSync(abs)) throw new Error(`not found: ${relPath}`);
   const isFolder = statSync(abs).isDirectory() || basename(abs) === "README.md";
   const entity = statSync(abs).isDirectory() ? abs : isFolder ? dirname(abs) : abs;
   if (entity.includes("/_archive/")) throw new Error("already archived");
+  const srcNote = statSync(entity).isDirectory() ? join(entity, "README.md") : entity;
+  const { fm, body } = parseNote(readFileSync(srcNote, "utf8"));
+  const def = opts.reg?.get(String(fm.type ?? ""));
+  if (def && def.statuses.length && !def.statuses.includes(opts.status)) throw new Error(`status ${opts.status} is not one of ${def.statuses.join("|")} for type ${def.type}`);
+  let successor = opts.supersededBy?.replace(/^\/+/, "");
+  if (successor) {
+    const sAbs = join(cfg.root, successor);
+    if (!existsSync(sAbs)) throw new Error(`superseded_by not found: ${successor}`);
+    if (statSync(sAbs).isDirectory()) successor = `${successor.replace(/\/$/, "")}/README.md`;
+  }
   const domain = dirname(entity);
   const target = join(domain, "_archive", basename(entity));
   mkdirSync(join(domain, "_archive"), { recursive: true });
   renameSync(entity, target);
   const notePath = statSync(target).isDirectory() ? join(target, "README.md") : target;
-  if (opts.status) {
-    const { fm, body } = parseNote(readFileSync(notePath, "utf8"));
-    fm.status = opts.status;
-    fm.updated = today();
-    writeFileSync(notePath, stringifyNote(fm, body));
-  }
-  const fromRel = relative(cfg.root, entity).split("\\").join("/");
   const toRel = relative(cfg.root, target).split("\\").join("/");
+  fm.status = opts.status;
+  if (successor) fm.superseded_by = relLink(statSync(target).isDirectory() ? `${toRel}/README.md` : toRel, successor);
+  fm.updated = today();
+  writeFileSync(notePath, stringifyNote(fm, body));
+  const fromRel = relative(cfg.root, entity).split("\\").join("/");
   const rewritten = rewriteLinks(cfg, fromRel, toRel);
   const rewrittenBronze = rewriteProcessedTo(cfg, fromRel, toRel);
   return { from: fromRel, to: toRel, rewritten, rewrittenBronze };
@@ -142,7 +185,7 @@ export function lint(cfg: KbConfig, db: Database, opts: { staleDays?: number } =
     if (!linked.has(r.path) && !["review", "trade_plan"].includes(r.type)) orphans.push(r.path);
     if (["project", "learning"].includes(r.type) && r.status === "active" && r.updated && days(r.updated) > (opts.staleDays ?? 30)) stale.push(r.path);
     if (r.type === "subscription" && r.status === "active" && fm.next_renewal && days(String(fm.next_renewal)) > -14) renewals.push(`${r.path} (${fm.next_renewal})`);
-    if (["done", "cancelled", "closed"].includes(r.status)) archiveCandidates.push(r.path);
+    if (["done", "cancelled", "closed", "merged"].includes(r.status)) archiveCandidates.push(r.path);
   }
   const singleUseTags = [...tagUses].filter(([, ps]) => ps.length === 1).map(([t, ps]) => `${t} (${ps[0]})`).sort();
   const metas = [...walkBronze(cfg)];

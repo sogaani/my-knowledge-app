@@ -6,6 +6,7 @@ import { GOLD, GOLD_PREFIX, encryptedDomainOf, isEncryptedPath, today, type KbCo
 import { runQuery, type QueryResult } from "./query";
 import { buildCrossViews } from "./views";
 import { currencyOf, formatMoney, formatTotals, monthlyByCurrency } from "./money";
+import { RECOMMENDATION_TYPE, currentRecommendation, parseSuggestions, readSuggestionBody, suggestionCounts } from "./suggest";
 
 /** Regenerate every Gold markdown file from the index. Gold is derived; never hand-edited. */
 export function buildGold(cfg: KbConfig, db: Database): string[] {
@@ -92,10 +93,8 @@ export function buildGold(cfg: KbConfig, db: Database): string[] {
     ...learning.map((l) => `| ${link(l)} | ${l.fm.level ?? ""} | ${l.status} | ${l.fm.last_reviewed ?? ""} | ${l.summary} |`),
   ].join("\n"));
 
-  // 307 suggestions: keep if exists (written by the recommend skill), else create placeholder
-  if (!existsSync(join(cfg.gold, GOLD.suggestions))) {
-    out(GOLD.suggestions, "# おすすめ\n\n（`recommend` スキルがここを更新します）\n");
-  }
+  // 307 suggestions: the current `recommendation` note (208_reviews) and its reaction counts; the list itself stays in Silver
+  out(GOLD.suggestions, suggestionsGold(cfg, db));
 
   // 300 market: catalyst calendar + stock / theme lists (200_market is not encrypted: no amounts or quantities here)
   {
@@ -246,6 +245,27 @@ export function stockThemes(stocks: QueryResult[], themes: QueryResult[]): Map<s
     if (all.length) out.set(s.path, all);
   }
   return out;
+}
+
+/**
+ * 307: entry to the suggestions. The `recommend` skill writes `recommendation` notes in Silver and the WebUI marks the
+ * reactions there; this page links the current (open) note with per-section counts and lists the earlier ones.
+ */
+export function suggestionsGold(cfg: KbConfig, db: Database): string {
+  const current = currentRecommendation(db);
+  const all = runQuery(db, { filters: [{ field: "type", op: "=", value: RECOMMENDATION_TYPE }], orderBy: "-date", limit: 50 })
+    .sort((a, b) => String(b.fm.date ?? "").localeCompare(String(a.fm.date ?? "")) || b.updated.localeCompare(a.updated));
+  const lines = ["# おすすめ", "", "`recommend` スキルが 208_reviews の `recommendation` ノートに書き、WebUI の「おすすめ」タブがそれを表示して反応（読む / 興味なし）を記録する。ここは入口だけ。", ""];
+  if (!current) lines.push("（まだ提案がありません。`recommend` を実行すると作られます）");
+  else {
+    const counts = suggestionCounts(parseSuggestions(readSuggestionBody(cfg, current.path)));
+    lines.push(`## 最新: ${link(current)}（${current.fm.date ?? current.updated}）`, "", ...(current.summary ? [current.summary, ""] : []),
+      "| 区分 | 提案 | 読む・観る | 興味なし | 未反応 |", "|---|---|---|---|---|",
+      ...(counts.length ? counts.map((c) => `| ${c.section} | ${c.total} | ${c.read} | ${c.dismissed} | ${c.open} |`) : ["| （なし） | | | | |"]));
+  }
+  const past = all.filter((n) => n.path !== current?.path);
+  if (past.length) lines.push("", "## 過去の一覧", "", ...past.map((n) => `- ${link(n)}（${n.fm.date ?? n.updated}、${n.status}）${n.summary ? " — " + n.summary : ""}`));
+  return lines.join("\n");
 }
 
 /** Inline a Silver note body into Gold: drop its H1 and rebase relative .md links from the note's folder to 300_gold/. */

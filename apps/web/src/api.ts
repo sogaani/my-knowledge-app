@@ -33,7 +33,9 @@ export const api = {
   patch: (path: string, body: { fm?: Record<string, unknown>; append?: { section: string; line: string } }) => req<NoteDetail>(`/notes/${path}`, { method: "PATCH", body: JSON.stringify(body) }),
   create: (body: { type: string; title: string; set?: Record<string, unknown>; force?: boolean }) => req<{ path: string }>("/notes", { method: "POST", body: JSON.stringify(body) }),
   gold: (name: string) => req<{ markdown: string }>(`/gold/${name}`),
-  react: (body: { id: string; reaction: "read" | "dismissed"; title?: string; type?: "book" | "media" }) => req<{ ok: boolean; created: string | null }>("/suggestions/react", { method: "POST", body: JSON.stringify(body) }),
+  /** The current recommendation note (Silver): its body holds the checklist the page parses. */
+  suggestions: () => req<{ path: string | null; title?: string; updated: string; markdown: string }>("/suggestions"),
+  react: (body: { id: string; reaction: "read" | "dismissed" }) => req<{ ok: boolean; created: string | null; existing: string | null }>("/suggestions/react", { method: "POST", body: JSON.stringify(body) }),
   inboxJson: (body: { url?: string; text?: string; title?: string }) => req<{ job: Job }>("/inbox", { method: "POST", body: JSON.stringify(body) }),
   inboxForm: async (form: FormData) => { const r = await fetch("/api/inbox", { method: "POST", body: form }); if (!r.ok) throw new Error(await r.text()); return r.json() as Promise<{ job: Job }>; },
   jobs: () => req<Job[]>("/jobs"),

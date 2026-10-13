@@ -124,7 +124,7 @@ function notesUnder(cfg: KbConfig, paths: string[]): { notes: Note[]; covers: (p
   return { notes, covers: (p) => files.has(p) || dirs.some((d) => p.startsWith(`${d}/`)) };
 }
 
-/** Resolve markdown links + `related:` entries to repo-relative paths. */
+/** Resolve markdown links, `related:` entries and `superseded_by` to repo-relative paths. */
 export function extractLinks(n: Note): string[] {
   const base = n.path.split("/").slice(0, -1);
   const out = new Set<string>();
@@ -141,7 +141,9 @@ export function extractLinks(n: Note): string[] {
     const r = resolveRel(m[1]);
     if (r) out.add(r);
   }
-  for (const rel of (Array.isArray(n.fm.related) ? n.fm.related : []) as string[]) {
+  // superseded_by is note-relative like related; a repo-relative value is a validate error, not a link
+  const successor = typeof n.fm.superseded_by === "string" && n.fm.superseded_by && !/^(\/|\d{3}_)/.test(n.fm.superseded_by) ? [n.fm.superseded_by] : [];
+  for (const rel of [...((Array.isArray(n.fm.related) ? n.fm.related : []) as string[]), ...successor]) {
     const r = resolveRel(String(rel));
     if (r) out.add(r);
   }

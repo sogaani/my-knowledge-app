@@ -18,7 +18,7 @@ function flags(args: string[]) {
     if (a.startsWith("--")) {
       const [k, v] = a.slice(2).split("=");
       if (v !== undefined) f[k] = v;
-      else if (args[i + 1] !== undefined && !args[i + 1].startsWith("--") && ["set", "dest", "kind", "text", "status", "older-than", "type", "limit", "order", "chars", "title", "folder", "section", "fields", "mode", "account", "max-lookups"].includes(k)) f[k] = args[++i];
+      else if (args[i + 1] !== undefined && !args[i + 1].startsWith("--") && ["set", "dest", "kind", "text", "status", "superseded-by", "older-than", "type", "limit", "order", "chars", "title", "folder", "section", "fields", "mode", "account", "max-lookups"].includes(k)) f[k] = args[++i];
       else f[k] = true;
     } else pos.push(a);
   }
@@ -221,8 +221,10 @@ switch (cmd) {
   }
   case "archive": {
     const { f, pos } = flags(argv);
-    if (!pos[0]) die("usage: kb archive <path> [--status done]");
-    json(archiveNote(cfg, pos[0], { status: f.status as string | undefined }));
+    // --status is required: an archived note says why it ended; --superseded-by names where it continues (merged / replaced)
+    const status = f.status;
+    if (!pos[0] || typeof status !== "string" || !status) { die("usage: kb archive <path> --status <done|cancelled|merged|closed|…> [--superseded-by <silver-path>]"); break; }
+    json(archiveNote(cfg, pos[0], { status, supersededBy: f["superseded-by"] as string | undefined, reg }));
     break;
   }
   case "validate": {
@@ -332,7 +334,7 @@ switch (cmd) {
                                      semantic + keyword search (LanceDB; Ollama for vectors). ● high / ○ low confidence
   embed [--full] | embed --check | embed --setup   (re)embed Silver into LanceDB | status | install Lindera dict + pull model
   index [--full] | build             refresh SQLite + LanceDB index | regenerate 300_gold
-  archive <path> [--status done]     move to _archive/ and rewrite links and Bronze processed_to
+  archive <path> --status <s> [--superseded-by <silver-path>]   move to _archive/ with its final status (and successor); rewrite links and Bronze processed_to
   validate [--quiet] | lint [--json]
   backup [--dest d] [--dry-run] | prune [--older-than 3] [--type web] [--dry-run]`);
 }

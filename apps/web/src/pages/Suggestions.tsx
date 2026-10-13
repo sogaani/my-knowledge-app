@@ -1,17 +1,20 @@
 import { useEffect, useState } from "react";
 import { CheckIcon, SparklesIcon, XIcon } from "lucide-react";
 import { api } from "@/api";
-import { Chip, Err, Loading, PageTitle, Section, Toolbar } from "@/components/common";
+import { Chip, Err, Loading, NoteLink, PageTitle, Section, Toolbar } from "@/components/common";
 import { Button } from "@/components/ui/button";
 import { useAction } from "@/lib/useAction";
 import { cn } from "@/lib/utils";
 
 interface Item { id: string; section: string; line: string; title: string; reacted?: string; url?: string }
+interface Data { path: string | null; title?: string; updated: string; items: Item[] }
 
-/** Parses 300_gold/307_suggestions.md: "- [ ] **Title** — ... <!-- id: x[, reaction: y] -->" under "## 本" / "## 映画・ドラマ" / "## 記事". */
-function parse(md: string): { updated: string; items: Item[] } {
+/**
+ * Parses the current `recommendation` note (200_silver/208_reviews): "- [ ] **Title** — ... <!-- id: x[, reaction: y] -->"
+ * under "## 本" / "## 映画・ドラマ" / "## 記事". Same grammar as `parseSuggestions` in @kb/core (the API records reactions there).
+ */
+function parse(md: string): Item[] {
   const items: Item[] = []; let section = "";
-  const updated = /（(\d{4}-\d{2}-\d{2}) 更新）/.exec(md)?.[1] ?? "";
   for (const line of md.split("\n")) {
     const h = /^##\s+(.+)/.exec(line); if (h) { section = h[1].trim(); continue; }
     const m = /^- \[[ x]\]\s*(.*?)\s*<!--\s*id:\s*([^,\s]+)(?:,\s*reaction:\s*(\w+))?\s*-->/.exec(line);
@@ -21,13 +24,13 @@ function parse(md: string): { updated: string; items: Item[] } {
     const url = /\((https?:[^)]+)\)/.exec(body)?.[1];
     items.push({ id: m[2], section, line: body.replace(/\*\*/g, ""), title, reacted: m[3], url });
   }
-  return { updated, items };
+  return items;
 }
 
 export default function Suggestions() {
-  const [data, setData] = useState<{ updated: string; items: Item[] } | null>(null);
+  const [data, setData] = useState<Data | null>(null);
   const [err, setErr] = useState<unknown>(null);
-  const load = () => api.gold("307_suggestions").then((g) => setData(parse(g.markdown))).catch(setErr);
+  const load = () => api.suggestions().then((s) => setData({ path: s.path, title: s.title, updated: s.updated, items: parse(s.markdown) })).catch(setErr);
   useEffect(() => { load(); }, []);
   const refresh = useAction(() => api.runJob("recommend"), { success: (j) => `recommend を投入しました（${j.id.slice(0, 8)}）。終わったら再読み込みしてください` });
   if (err) return <Err e={err} />;
@@ -38,6 +41,7 @@ export default function Suggestions() {
       <PageTitle sub={data.updated && `${data.updated} 更新`}>おすすめ</PageTitle>
       <Toolbar>
         <Button variant="outline" loading={refresh.pending} onClick={() => refresh.run()}>{!refresh.pending && <SparklesIcon data-icon="inline-start" />}recommend を実行（Mac ワーカー）</Button>
+        {data.path && <span className="text-sm text-muted-foreground">ノート: <NoteLink n={{ path: data.path, title: data.title ?? data.path }} /></span>}
       </Toolbar>
       {data.items.length === 0 && <p className="text-muted-foreground">まだ提案がありません。上のボタンで生成できます。</p>}
       {sections.map((s) => (
@@ -53,11 +57,10 @@ function SuggestionItem({ it, article, onDone }: { it: Item; article: boolean; o
   const [which, setWhich] = useState<"read" | "dismissed" | null>(null);
   const react = useAction(async (reaction: "read" | "dismissed") => {
     setWhich(reaction);
-    const type = it.section.includes("本") ? "book" : it.section.includes("映画") ? "media" : undefined;
-    const r = await api.react({ id: it.id, reaction, title: it.title, type });
+    const r = await api.react({ id: it.id, reaction });
     await onDone();
     return r;
-  }, { success: (r) => (r.created ? `ノートを作成しました: ${r.created}` : "記録しました") });
+  }, { success: (r) => (r.created ? `ノートを作成しました: ${r.created}` : r.existing ? `記録しました（既存のノート: ${r.existing}）` : "記録しました") });
   return (
     <li className={cn("flex flex-wrap items-center gap-x-2 gap-y-1", it.reacted && "opacity-50")}>
       <span className="min-w-0 flex-1">

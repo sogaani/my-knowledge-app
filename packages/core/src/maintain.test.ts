@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { GOLD, isEncryptedPath, loadConfig } from "./config";
 import { indexNotes, openDb } from "./db";
+import { parseNote } from "./frontmatter";
 import { runQuery } from "./query";
 import { archiveNote, lint, summarizeBronze, validateAll, validateBronze } from "./maintain";
 import { buildGold, stockThemes } from "./build";
@@ -29,7 +30,10 @@ function fixtureRoot(): string {
   schema("book", "200_silver/204_books");
   schema("review", "200_silver/208_reviews");
   schema("ledger", "200_silver/203_finance");
-  schema("project", "200_silver/206_projects");
+  w("900_system/schemas/project.json", JSON.stringify({
+    $id: "kb:project", "x-kb": { folder: "200_silver/206_projects", entity: "folder" }, allOf: [{ $ref: "kb:common" }],
+    properties: { type: { const: "project" }, status: { enum: ["idea", "active", "done", "cancelled", "merged"] } },
+  }));
   schema("stock", "200_silver/200_market");
   schema("theme", "200_silver/200_market");
   w("AGENTS.md", "");
@@ -46,6 +50,7 @@ function fixtureRoot(): string {
   note("200_silver/203_finance/2026-10.md", { ...base, type: "ledger", title: "2026-10", updated: "2026-10-12", summary: "SECRET-SUMMARY" });
   note("200_silver/208_reviews/W41.md", { ...base, type: "review", title: "W41", updated: "2026-10-11", related: ["../203_finance/2026-10.md"] }, "\n[本](../204_books/本A.md) と [台帳](../203_finance/2026-10.md)\n");
   note("200_silver/206_projects/2026-10_個人/README.md", { ...base, type: "project", title: "個人", status: "active", updated: "2026-10-09" });
+  note("200_silver/206_projects/2026-10_まとめ/README.md", { ...base, type: "project", title: "まとめ", status: "active", updated: "2026-10-09" });
   note("200_silver/207_work/2026-10_仕事/README.md", { ...base, type: "project", title: "SECRET-WORK", status: "active", updated: "2026-10-13" });
   w("200_silver/206_projects/2026-10_個人/log.md", "# log\n");
   // Bronze metas (local only): a project note + its log, a reviewed mail, an unprocessed mail, a mistyped `kb processed`, and stale / shell-quoted paths
@@ -90,7 +95,7 @@ describe("buildGold", () => {
     const home = readFileSync(join(cfg.gold, GOLD.home), "utf8");
     expect(home).toContain("[本A](../200_silver/204_books/本A.md)");
     expect(home).toContain("暗号化ドメインの更新（2026-10-09 以降）: 203_finance 1 件、207_work 1 件");
-    expect(home).toContain("進行中 1（仕事 1）");
+    expect(home).toContain("進行中 2（仕事 1）");
     expect(home).not.toContain("SECRET");
     expect(home).not.toContain("203_finance/");
     expect(home).not.toContain("207_work/");
@@ -148,6 +153,46 @@ describe("validateBronze", () => {
   test("is part of validateAll", () => {
     const cfg = loadConfig(fixtureRoot());
     expect(validateAll(cfg, new SchemaRegistry(cfg)).filter((i) => i.path === "20261011-mail-dddddd")).toHaveLength(1);
+  });
+});
+
+describe("archiveNote lifecycle", () => {
+  test("refuses to archive without a status, or with one the type does not allow", () => {
+    const cfg = loadConfig(fixtureRoot());
+    const reg = new SchemaRegistry(cfg);
+    expect(() => archiveNote(cfg, "200_silver/206_projects/2026-10_個人", { status: "" })).toThrow(/status required/);
+    expect(() => archiveNote(cfg, "200_silver/206_projects/2026-10_個人", { status: "finished", reg })).toThrow(/not one of/);
+    expect(() => archiveNote(cfg, "200_silver/206_projects/2026-10_個人", { status: "merged", supersededBy: "200_silver/206_projects/2026-10_無い", reg })).toThrow(/superseded_by not found/);
+    expect(readFileSync(join(cfg.root, "200_silver/206_projects/2026-10_個人/README.md"), "utf8")).toContain('status: "active"'); // nothing moved
+  });
+  test("merged: writes the successor as a note-relative superseded_by from the archived location, which validate accepts", () => {
+    const cfg = loadConfig(fixtureRoot());
+    const reg = new SchemaRegistry(cfg);
+    const r = archiveNote(cfg, "200_silver/206_projects/2026-10_個人", { status: "merged", supersededBy: "200_silver/206_projects/2026-10_まとめ", reg });
+    const fm = parseNote(readFileSync(join(cfg.root, r.to, "README.md"), "utf8")).fm;
+    expect(fm.status).toBe("merged");
+    expect(fm.superseded_by).toBe("../../2026-10_まとめ/README.md");
+    expect(validateAll(cfg, reg).filter((i) => i.path.includes("2026-10_個人"))).toEqual([]);
+  });
+});
+
+describe("validateAll superseded_by", () => {
+  test("errors on a missing or non-relative successor, warns on merged without one", () => {
+    const cfg = loadConfig(fixtureRoot());
+    const note = (name: string, fm: string) => {
+      mkdirSync(join(cfg.root, `200_silver/206_projects/_archive/${name}`), { recursive: true });
+      writeFileSync(join(cfg.root, `200_silver/206_projects/_archive/${name}/README.md`), `---\ntype: project\ntitle: ${name}\nstatus: merged\ncreated: 2026-10-01\nupdated: 2026-10-01\nsummary: s\n${fm}\n---\n`);
+    };
+    note("a", 'superseded_by: "../../2026-10_まとめ/README.md"');
+    note("b", 'superseded_by: "../../2026-10_消えた/README.md"');
+    note("c", 'superseded_by: "200_silver/206_projects/2026-10_まとめ/README.md"');
+    note("d", "");
+    const issues = validateAll(cfg, new SchemaRegistry(cfg)).filter((i) => i.path.includes("/_archive/")).map((i) => [i.level, i.path.split("/")[3], i.msg]).sort((a, b) => a[1]!.localeCompare(b[1]!));
+    expect(issues).toEqual([
+      ["error", "b", "superseded_by does not exist: ../../2026-10_消えた/README.md"],
+      ["error", "c", "superseded_by must be a path relative to the note (like related): 200_silver/206_projects/2026-10_まとめ/README.md"],
+      ["warn", "d", "status merged but superseded_by is empty (where did it go?)"],
+    ]);
   });
 });
 

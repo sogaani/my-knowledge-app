@@ -3,8 +3,8 @@ import { serveStatic } from "hono/bun";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import {
-  runQuery, parseFilters, readNote, patchFrontmatter, createNote, DuplicateError, extractLinks,
-  keywordSearch, monthlyByCurrency, errorHead, LAYOUT, GOLD, SILVER_PREFIX, GOLD_PREFIX, type SearchResponse, type SearchMode,
+  runQuery, parseFilters, readNote, patchFrontmatter, createNote, DuplicateError, extractLinks, currentRecommendation, reactToSuggestion,
+  keywordSearch, monthlyByCurrency, errorHead, LAYOUT, SILVER_PREFIX, GOLD_PREFIX, type SearchResponse, type SearchMode, type Reaction,
 } from "@kb/core";
 import { env } from "./env";
 import { authenticate, requireUser, requireWorker, requireInboxWriter, requireUserOrWorker, type Principal } from "./auth";
@@ -184,7 +184,6 @@ api.get("/gold/*", requireUser, (c) => {
   return c.json({ name, markdown: readFileSync(abs, "utf8") });
 });
 
-/** Suggestions live in 300_gold/307_suggestions.md as checklist lines with <!-- id: x --> markers. */
 // ---- Web Push: the browser subscribes here; the worker's job completion fans out (see /worker/jobs/:id/done) ----
 api.get("/push/vapid", requireUser, (c) => c.json({ publicKey: pushEnabled() ? env.vapidPublicKey : null, subscriptions: listPushSubscriptions().length }));
 api.post("/push/subscribe", requireUser, async (c) => {
@@ -200,22 +199,24 @@ api.delete("/push/subscribe", requireUser, async (c) => {
 });
 api.post("/push/test", requireUser, async (c) => c.json(await sendPushToAll({ title: "my-knowledge", body: "テスト通知です", url: "/trading", tag: "test" })));
 
+/**
+ * Suggestions are the current `recommendation` note in Silver (208_reviews), written by the recommend skill; its
+ * checklist lines carry <!-- id: x --> markers and the reactions. Gold's 307 is only an entry page built from it.
+ */
+api.get("/suggestions", requireUser, (c) => {
+  const cur = currentRecommendation(db);
+  if (!cur) return c.json({ path: null, markdown: "", updated: "" });
+  const note = readNote(cfg, join(cfg.root, cur.path));
+  return c.json({ path: cur.path, title: cur.title, updated: String(cur.fm.date ?? cur.updated), markdown: note?.body ?? "" });
+});
 api.post("/suggestions/react", requireUser, async (c) => {
-  const { id, reaction, title, type } = (await c.req.json()) as { id: string; reaction: "read" | "dismissed"; title?: string; type?: "book" | "media" };
-  const abs = join(cfg.gold, GOLD.suggestions);
-  if (!existsSync(abs)) return c.json({ error: "no suggestions" }, 404);
-  const text = readFileSync(abs, "utf8");
-  if (!id) return c.json({ error: "id required" }, 400);
-  const re = new RegExp(`<!--\\s*id:\\s*${id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[^>]*-->`);
-  if (!re.test(text)) return c.json({ error: "id not found" }, 404);
-  writeFileSync(abs, text.replace(re, `<!-- id: ${id}, reaction: ${reaction} -->`).replace(new RegExp(`- \\[ \\]([^\\n]*<!-- id: ${id},)`), "- [x]$1"));
-  const paths = [`${GOLD_PREFIX}${GOLD.suggestions}`];
-  let created: string | null = null;
-  if (reaction === "read" && title && type) {
-    try { created = createNote(cfg, reg, db, { type, title, set: { status: "want", summary: "おすすめから追加" } }); paths.push(created); } catch {}
-  }
+  const { id, reaction } = (await c.req.json()) as { id?: string; reaction?: Reaction };
+  if (!id || !reaction || !["read", "dismissed"].includes(reaction)) return c.json({ error: "id and reaction (read | dismissed) required" }, 400);
+  let r: ReturnType<typeof reactToSuggestion>;
+  try { r = reactToSuggestion(cfg, reg, db, { id, reaction }); } catch (e) { return c.json({ error: (e as Error).message }, 404); }
+  const paths = [r.path, ...(r.created ? [r.created] : [])];
   const commit = await timed(c, "index", () => commitKb(paths, `web: suggestion ${id} ${reaction}`));
-  return c.json({ ok: true, created, commit });
+  return c.json({ ok: true, created: r.created, existing: r.existing ?? null, commit });
 });
 
 /** Uploaded filenames come from outside (web UI, Apps Script): keep the basename, drop path/control chars. */

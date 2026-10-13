@@ -21,7 +21,7 @@ export const CHUNKS_TABLE = "chunks";
 export interface VectorMeta { model: string; dim: number; tokenizer: string; chunker: number; updatedAt: string; rows?: number }
 
 export interface ChunkRow {
-  id: string; path: string; note_path: string; idx: number; heading: string; text: string; spoiler: boolean;
+  id: string; path: string; note_path: string; idx: number; heading: string; text: string; spoiler: boolean; thin: boolean;
   type: string; domain: string; status: string; archived: boolean; updated: string; note_hash: string; vector: number[];
   _distance?: number; _score?: number;
 }
@@ -44,6 +44,8 @@ export function readVectorMeta(cfg: KbConfig): VectorMeta | null {
 
 export class VectorStore {
   private constructor(public cfg: KbConfig, private lance: Lance, private conn: Connection, public table: Table | null, public meta: VectorMeta | null) {}
+  /** Columns to read back; an index built by an older chunker lacks `thin`, and must stay searchable until `kb embed` rebuilds it. */
+  private selectCols: string[] = SELECT_COLS;
 
   static async open(cfg: KbConfig): Promise<VectorStore> {
     applyLanguageModelHome(cfg);
@@ -52,7 +54,12 @@ export class VectorStore {
     const conn = await lance.connect(cfg.lanceDir);
     const names = await conn.tableNames();
     const table = names.includes(CHUNKS_TABLE) ? await conn.openTable(CHUNKS_TABLE) : null;
-    return new VectorStore(cfg, lance, conn, table, readVectorMeta(cfg));
+    const store = new VectorStore(cfg, lance, conn, table, readVectorMeta(cfg));
+    if (table) {
+      const have = new Set((await table.schema()).fields.map((f) => f.name));
+      store.selectCols = SELECT_COLS.filter((c) => have.has(c));
+    }
+    return store;
   }
 
   /** Usable for search: table exists and meta describes it. */
@@ -67,12 +74,13 @@ export class VectorStore {
     const f = (name: string, type: any, nullable = false) => new arrow.Field(name, type, nullable);
     const schema = new arrow.Schema([
       f("id", new arrow.Utf8()), f("path", new arrow.Utf8()), f("note_path", new arrow.Utf8()), f("idx", new arrow.Int32()),
-      f("heading", new arrow.Utf8()), f("text", new arrow.Utf8()), f("spoiler", new arrow.Bool()),
+      f("heading", new arrow.Utf8()), f("text", new arrow.Utf8()), f("spoiler", new arrow.Bool()), f("thin", new arrow.Bool()),
       f("type", new arrow.Utf8()), f("domain", new arrow.Utf8()), f("status", new arrow.Utf8()), f("archived", new arrow.Bool()),
       f("updated", new arrow.Utf8()), f("note_hash", new arrow.Utf8()),
       f("vector", new arrow.FixedSizeList(meta.dim, new arrow.Field("item", new arrow.Float32(), true))),
     ]);
     this.table = await this.conn.createEmptyTable(CHUNKS_TABLE, schema, { mode: "overwrite" });
+    this.selectCols = SELECT_COLS;
     this.writeMeta({ ...meta, updatedAt: new Date().toISOString(), rows: 0 });
   }
 
@@ -121,20 +129,20 @@ export class VectorStore {
 
   async vectorSearch(vector: number[], opts: { where?: string; limit: number }): Promise<ChunkRow[]> {
     if (!this.table) return [];
-    let q = this.table.vectorSearch(vector).distanceType("cosine").limit(opts.limit).select(SELECT_COLS);
+    let q = this.table.vectorSearch(vector).distanceType("cosine").limit(opts.limit).select(this.selectCols);
     if (opts.where) q = q.where(opts.where);
     return (await q.toArray()) as ChunkRow[];
   }
 
   async ftsSearch(text: string, opts: { where?: string; limit: number }): Promise<ChunkRow[]> {
     if (!this.table) return [];
-    let q = this.table.search(text, "fts", "text").limit(opts.limit).select(SELECT_COLS);
+    let q = this.table.search(text, "fts", "text").limit(opts.limit).select(this.selectCols);
     if (opts.where) q = q.where(opts.where);
     return (await q.toArray()) as ChunkRow[];
   }
 }
 
-const SELECT_COLS = ["id", "path", "note_path", "idx", "heading", "text", "spoiler", "type", "domain", "status", "archived", "updated"];
+const SELECT_COLS = ["id", "path", "note_path", "idx", "heading", "text", "spoiler", "thin", "type", "domain", "status", "archived", "updated"];
 
 export interface EmbedRunOpts { full?: boolean; log?: (s: string) => void }
 
@@ -179,7 +187,7 @@ export async function embedNotes(cfg: KbConfig, store: VectorStore, embedder: Em
     for (const g of group) {
       for (const c of g.chunks) {
         rows.push({
-          id: c.id, path: c.path, note_path: c.notePath, idx: c.idx, heading: c.heading, text: c.text, spoiler: c.spoiler,
+          id: c.id, path: c.path, note_path: c.notePath, idx: c.idx, heading: c.heading, text: c.text, spoiler: c.spoiler, thin: c.thin,
           type: g.note.type, domain: domainOf(g.note.path), status: g.note.status, archived: g.note.archived,
           updated: String(g.note.fm.updated ?? ""), note_hash: g.hash, vector: vectors[vi++],
         });

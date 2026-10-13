@@ -31,6 +31,11 @@ export interface SearchHit {
 export interface SearchResponse { hits: SearchHit[]; mode: SearchMode; degraded?: string }
 
 const RRF_K = 60;
+/**
+ * Weight of a `thin` chunk (a note with nothing but its header) that only the vector retriever found: similarity on a
+ * title + summary alone is weak evidence, so such notes sit below ones with content. A lexical hit keeps full weight.
+ */
+export const THIN_WEIGHT = 0.5;
 /** Fields the Lance table can filter on directly; anything else is checked against SQLite frontmatter. */
 const LANCE_FIELDS = new Set(["type", "status", "domain"]);
 
@@ -97,8 +102,8 @@ export async function search(cfg: KbConfig, db: Database, query: string, opts: S
   return { hits, mode, degraded };
 }
 
-/** Reciprocal Rank Fusion across retrievers; returns chunk rows sorted by fused score. */
-export function rrf(lists: { via: "vector" | "keyword"; rows: ChunkRow[] }[], k = RRF_K) {
+/** Reciprocal Rank Fusion across retrievers (vector-only thin chunks weighted by THIN_WEIGHT); returns chunk rows sorted by fused score. */
+export function rrf(lists: { via: "vector" | "keyword"; rows: ChunkRow[] }[], k = RRF_K, thinWeight = THIN_WEIGHT) {
   const acc = new Map<string, { row: ChunkRow; score: number; via: ("vector" | "keyword")[] }>();
   for (const { via, rows } of lists) {
     rows.forEach((row, rank) => {
@@ -108,6 +113,7 @@ export function rrf(lists: { via: "vector" | "keyword"; rows: ChunkRow[] }[], k 
       acc.set(row.id, e);
     });
   }
+  for (const e of acc.values()) if (e.row.thin && !e.via.includes("keyword")) e.score *= thinWeight;
   return [...acc.values()].sort((a, b) => b.score - a.score);
 }
 

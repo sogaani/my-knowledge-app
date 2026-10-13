@@ -7,7 +7,7 @@ import { loadConfig, type KbConfig } from "./config";
 import { openDb, indexNotes } from "./db";
 import type { Embedder, EmbedProfile } from "./embed";
 import { VectorStore, embedNotes } from "./vector";
-import { search, rrf, buildWhere, snippet } from "./search";
+import { search, rrf, buildWhere, snippet, THIN_WEIGHT } from "./search";
 import type { ChunkRow } from "./vector";
 
 const DIM = 16;
@@ -42,6 +42,7 @@ beforeAll(() => {
   write("200_silver/204_books/ラーメン本.md", { type: "book", title: "東京ラーメン百選", status: "reading", tags: ["food"], rating: 3, summary: "東京のラーメン店ガイド", updated: "2026-10-02" },
     "## メモ\n\n東京タワー近くの店が良かった。");
   write("200_silver/205_media/_archive/old.md", { type: "media", title: "古い映画", status: "done", tags: [], summary: "アーカイブ済みの映画", updated: "2020-01-01" }, "殺人事件の映画。");
+  write("200_silver/204_books/積読.md", { type: "book", title: "積読の本", status: "todo", tags: [], summary: "おすすめから追加", updated: "2026-10-03" }, "# 積読の本\n");
   cfg = loadConfig(root);
 });
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -57,14 +58,14 @@ describe("VectorStore + embedNotes", () => {
 
     const s1 = await embedNotes(cfg, store, emb, {});
     expect(s1.full).toBe(true);
-    expect(s1.embedded).toBe(3);
+    expect(s1.embedded).toBe(4);
     expect(s1.rows).toBeGreaterThanOrEqual(6);
     expect(store.meta?.tokenizer).toBe("icu");
     expect(store.meta?.dim).toBe(DIM);
 
     const s2 = await embedNotes(cfg, store, emb, {});
     expect(s2.embedded).toBe(0);
-    expect(s2.skipped).toBe(3);
+    expect(s2.skipped).toBe(4);
 
     write("200_silver/204_books/ラーメン本.md", { type: "book", title: "東京ラーメン百選", status: "done", tags: ["food"], rating: 4, summary: "東京のラーメン店ガイド", updated: "2026-10-03" }, "## メモ\n\n読了。");
     rmSync(join(root, "200_silver/205_media/_archive/old.md"));
@@ -73,7 +74,9 @@ describe("VectorStore + embedNotes", () => {
     expect(s3.embedded).toBe(1);
     expect(s3.removed).toBe(1);
     const hashes = await store.existingHashes();
-    expect([...hashes.keys()].sort()).toEqual(["200_silver/204_books/ラーメン本.md", "200_silver/204_books/十角館の殺人.md"]);
+    expect([...hashes.keys()].sort()).toEqual(["200_silver/204_books/ラーメン本.md", "200_silver/204_books/十角館の殺人.md", "200_silver/204_books/積読.md"]);
+    const thinRows = (await store.table!.query().where("thin = true").select(["note_path"]).toArray()) as { note_path: string }[];
+    expect(thinRows.map((r) => r.note_path)).toEqual(["200_silver/204_books/積読.md"]);
 
     // reopen: meta persisted, FTS index present
     store = await VectorStore.open(cfg);
@@ -128,12 +131,21 @@ describe("VectorStore + embedNotes", () => {
 });
 
 describe("helpers", () => {
-  const row = (id: string): ChunkRow => ({ id, path: id, note_path: id, idx: 0, heading: "", text: "", spoiler: false, type: "", domain: "", status: "", archived: false, updated: "", note_hash: "", vector: [] });
+  const row = (id: string): ChunkRow => ({ id, path: id, note_path: id, idx: 0, heading: "", text: "", spoiler: false, thin: false, type: "", domain: "", status: "", archived: false, updated: "", note_hash: "", vector: [] });
   test("rrf fuses ranks and records provenance", () => {
     const r = rrf([{ via: "vector", rows: [row("a"), row("b")] }, { via: "keyword", rows: [row("b"), row("c")] }]);
     expect(r[0].row.id).toBe("b");
     expect(r[0].via).toEqual(["vector", "keyword"]);
     expect(r[0].score).toBeCloseTo(1 / 61 + 1 / 62);
+  });
+  test("rrf weighs vector-only thin chunks down, keyword hits on thin chunks keep full weight", () => {
+    const thin = { ...row("t"), thin: true };
+    const r = rrf([{ via: "vector", rows: [thin, row("a")] }]);
+    expect(r[0].row.id).toBe("a");
+    expect(r[1].score).toBeCloseTo(THIN_WEIGHT / 61);
+    const r2 = rrf([{ via: "vector", rows: [thin, row("a")] }, { via: "keyword", rows: [thin] }]);
+    expect(r2[0].row.id).toBe("t");
+    expect(r2[0].score).toBeCloseTo(2 / 61);
   });
   test("buildWhere escapes and skips non-lance fields", () => {
     expect(buildWhere([{ field: "type", op: "=", value: "bo'ok" }, { field: "rating", op: ">=", value: "4" }], false)).toBe("archived = false AND type = 'bo''ok'");

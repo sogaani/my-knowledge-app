@@ -20,12 +20,23 @@ Mac                                                k8s API pod (KB_EMBED=off, La
 
 | ファイル | 役割 |
 |---|---|
-| `chunk.ts` | H2 節ごとに chunk。先頭に title/summary/tags/スカラー frontmatter の header chunk。`> [!spoiler]` は独立 chunk（`spoiler=true`）。`log.md`/`tasks.md` は README の chunk として取り込む。`noteHash` で増分判定 |
+| `chunk.ts` | H2 節ごとに chunk。先頭に title/summary/tags/スカラー frontmatter の header chunk。`> [!spoiler]` は独立 chunk（`spoiler=true`）。`log.md`/`tasks.md` は README の chunk として取り込む。`noteHash` で増分判定。ノイズ対策は下の「chunk の作り方」 |
 | `embed.ts` | Ollama `/api/embed` クライアント。モデルごとの次元・クエリ/文書プレフィックス（bge-m3 は不要）。`ping()` でモデル未取得も検知 |
 | `lindera.ts` | `@lancedb/lancedb` 0.40.0 に同梱の lindera 3.0.7 と同じ版の辞書を GitHub Releases から取得し `config.yml` を書く。不在なら `icu` にフォールバック |
 | `vector.ts` | LanceDB テーブル `chunks` の作成・増分更新（hash 差分で削除→追加）・FTS 索引作成・`optimize()`。`meta.json` の model/dim/tokenizer/chunker が変わったら全再構築 |
-| `search.ts` | vector top-k + FTS top-k → RRF(k=60) → ノート単位に集約 → SQLite の frontmatter で残りの条件を評価。Lance/Ollama 不在時は SQLite キーワード検索（`keywordSearch`）に degrade |
+| `search.ts` | vector top-k + FTS top-k → RRF(k=60、vector だけが拾った `thin` chunk は 0.5 倍）→ ノート単位に集約 → SQLite の frontmatter で残りの条件を評価。Lance/Ollama 不在時は SQLite キーワード検索（`keywordSearch`）に degrade |
 | `query.ts` | `kb query --text` と API の `GET /api/notes?text=`、および上の縮退経路が使う SQLite 検索。`queryTerms` が辞書なしでクエリを語に割る |
+
+## chunk の作り方（`CHUNKER_VERSION = 2`）
+
+埋め込みと BM25 に効くノイズを chunk の段階で落とす。ルールを変えたら `CHUNKER_VERSION` を上げる（`meta.json` の `chunker` と食い違うと次の `kb embed` が全再構築する）。
+
+- 本文先頭の `# タイトル` 行は捨てる（タイトルと同じか、タイトルを含む行。`# 2026-10 予定`、log.md の `# X — ログ` も対象）。header chunk が title を持つので、`# KDDI` だけの chunk が header と二重に当たることはない。
+- URL は `text`（FTS・snippet）と `embedText` の両方から剥がす。`[text](url)` → `text`、`![alt](url)` → `alt`、`<https://…>` と裸 URL は削除。`splitLong` の前に剥がすので、ハード分割で URL の断片が残らない。location_log の日別テーブルは店名だけが残る。
+- `embedText` の先頭に付く文脈は title と tags だけ。summary は header chunk にだけ入れる（books の多くが同じ定型 summary を持つため、全 chunk に付けると本同士の chunk が似通う）。header chunk の `embedText` は header chunk そのもの（title を H1 にしたもの）。
+- 空の `> [!spoiler]- ネタバレ`（テンプレートの placeholder。本文行なし）は chunk にしない。
+- 本文（と添付）から chunk が 1 つも出ないノートは header chunk に `thin=true` を立てる。`search.ts` の RRF は、vector だけが拾った thin chunk の融合スコアを `THIN_WEIGHT`（0.5）倍にする。BM25 でも当たった（タイトル・summary に語がある）thin chunk は減点しない。summary の雰囲気だけが似ている空ノートが本文のあるノートの下に落ちる一方、`5G` で『5G教科書』の空ノートが上位に残る。
+- LanceDB の列 `thin`（Bool）はこの版で追加。古い索引には列がないので `VectorStore.open` はスキーマにある列だけ select し、`thin` 無しの行は減点なしで検索できる。移行は `kb embed --full`（または `chunker` 不一致による自動全再構築）。列を足す・変えるときも同じ: スキーマは `VectorStore.reset` で作り直すので、`CHUNKER_VERSION` を上げて全再構築すればよい。
 
 ## 縮退経路（SQLite キーワード検索）
 

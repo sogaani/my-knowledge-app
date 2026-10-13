@@ -78,6 +78,19 @@ export const SILVER_PREFIX = `${LAYOUT.silver}/`;
 export const GOLD_PREFIX = `${LAYOUT.gold}/`;
 /** Work projects (encrypted domain) live outside the project schema's folder. */
 export const WORK_FOLDER = `${LAYOUT.silver}/207_work`;
+/**
+ * Silver domains the data repo encrypts with git-crypt (its `.gitattributes` is the source of truth; keep in sync).
+ * Plaintext Gold and plaintext notes may mention these by count or aggregate only, never by title / summary / link.
+ */
+export const ENCRYPTED_DOMAINS = ["202_subscriptions", "203_finance", "207_work", "210_health", "211_location", "212_calendar"] as const;
+/** True for a repo-relative path inside an encrypted Silver domain. */
+export function isEncryptedPath(rel: string): boolean {
+  return ENCRYPTED_DOMAINS.some((d) => rel.startsWith(`${SILVER_PREFIX}${d}/`));
+}
+/** The encrypted domain folder (e.g. `203_finance`) a repo-relative path belongs to, or null. */
+export function encryptedDomainOf(rel: string): string | null {
+  return ENCRYPTED_DOMAINS.find((d) => rel.startsWith(`${SILVER_PREFIX}${d}/`)) ?? null;
+}
 
 /** Resolve the data repo root from KB_ROOT or by walking up to a dir that has AGENTS.md + the Silver folder. */
 export function findRoot(start?: string): string {

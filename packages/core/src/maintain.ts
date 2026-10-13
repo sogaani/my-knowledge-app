@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
 import type { Database } from "bun:sqlite";
-import { SILVER_PREFIX, WORK_FOLDER, today, type KbConfig } from "./config";
+import { SILVER_PREFIX, WORK_FOLDER, isEncryptedPath, today, type KbConfig } from "./config";
 import { parseNote, stringifyNote } from "./frontmatter";
 import { walkNotes, type Note } from "./notes";
 import type { SchemaRegistry } from "./schema";
@@ -9,7 +9,7 @@ import { listInbox, readMeta, walkBronze } from "./bronze";
 
 export interface Issue { level: "error" | "warn"; path: string; msg: string }
 
-/** Validate every Silver note: schema, links, sources. Gold is skipped (generated). */
+/** Validate every Silver note: schema, links, sources, plaintext → encrypted-domain links. Gold is skipped (generated). */
 export function validateAll(cfg: KbConfig, reg: SchemaRegistry): Issue[] {
   const issues: Issue[] = [];
   const notes = [...walkNotes(cfg, { dirs: [cfg.silver] })];
@@ -21,8 +21,11 @@ export function validateAll(cfg: KbConfig, reg: SchemaRegistry): Issue[] {
       issues.push({ level: "error", path: n.path, msg: `type ${n.type} belongs in ${def.folder}/` });
     }
     if (!n.summary) issues.push({ level: "warn", path: n.path, msg: "summary is empty" });
+    const plaintext = !isEncryptedPath(n.path);
     for (const dst of linksOf(n)) {
       if (!paths.has(dst) && !existsSync(join(cfg.root, dst))) issues.push({ level: "error", path: n.path, msg: `broken link: ${dst}` });
+      // a plaintext note that links into a git-crypt domain tends to carry its content along (title, summary): keep to counts / aggregates
+      if (plaintext && isEncryptedPath(dst)) issues.push({ level: "warn", path: n.path, msg: `plaintext note links into encrypted domain: ${dst} (refer by count / aggregate only)` });
     }
     for (const s of (n.fm.sources as string[] | undefined) ?? []) {
       if (/^https?:/.test(s)) continue;

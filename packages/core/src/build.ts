@@ -2,7 +2,7 @@ import { mkdirSync, writeFileSync, readdirSync, unlinkSync, existsSync } from "n
 import { join, posix } from "node:path";
 import { readNote } from "./notes";
 import type { Database } from "bun:sqlite";
-import { GOLD, GOLD_PREFIX, today, type KbConfig } from "./config";
+import { GOLD, GOLD_PREFIX, encryptedDomainOf, isEncryptedPath, today, type KbConfig } from "./config";
 import { runQuery, type QueryResult } from "./query";
 import { buildCrossViews } from "./views";
 import { currencyOf, formatMoney, formatTotals, monthlyByCurrency } from "./money";
@@ -70,11 +70,14 @@ export function buildGold(cfg: KbConfig, db: Database): string[] {
     ...(mByStatus.watched ?? []).map((m) => `| ${link(m)} | ${m.fm.kind ?? ""} | ${m.fm.platform ?? ""} | ${stars(m.fm.rating)} | ${m.fm.watched_at ?? ""} |`),
   ].join("\n"));
 
-  // 306 projects
-  const projects = q("type=project");
+  // 306 projects (plaintext): work projects live in 207_work (encrypted), so only their count appears here
+  const allProjects = q("type=project");
+  const projects = allProjects.filter((p) => !isEncryptedPath(p.path));
+  const workActive = allProjects.filter((p) => isEncryptedPath(p.path) && p.status === "active").length;
   const pBy = group(projects, (p) => p.status);
   out(GOLD.projects, [
     "# プロジェクト", "",
+    `- 仕事（207_work、暗号化）: 進行中 ${workActive} 件 — 内容はここに載せない`, "",
     "## 進行中", "", "| プロジェクト | 領域 | 期限 | 要約 |", "|---|---|---|---|",
     ...(pBy.active ?? []).map((p) => `| ${link(p)} | ${p.fm.area ?? ""} | ${p.fm.due ?? ""} | ${p.summary} |`),
     "", "## アイデア", ...list(pBy.idea ?? []),
@@ -184,7 +187,11 @@ export function buildGold(cfg: KbConfig, db: Database): string[] {
 
   // 300 home
   const reviews = q("type=review", { orderBy: "-updated", limit: 5 });
-  const recent = runQuery(db, { filters: [], orderBy: "-updated", limit: 15 }).filter((n) => !n.path.startsWith(GOLD_PREFIX));
+  // recent: plaintext notes only; encrypted domains (git-crypt) appear as per-domain counts so their titles / summaries stay out of this plaintext file
+  const silverByUpdated = runQuery(db, { filters: [], orderBy: "-updated", limit: 10000 }).filter((n) => !n.path.startsWith(GOLD_PREFIX));
+  const recent = silverByUpdated.filter((n) => !isEncryptedPath(n.path)).slice(0, 15);
+  const since = recent.at(-1)?.updated ?? "";
+  const encryptedRecent = countByDomain(silverByUpdated.filter((n) => isEncryptedPath(n.path) && n.updated >= since));
   out(GOLD.home, [
     "# ホーム", "",
     "読む順番: このページ → `kb query` → 該当ノート。Bronze は `kb source <id>`。", "",
@@ -196,7 +203,7 @@ export function buildGold(cfg: KbConfig, db: Database): string[] {
     `- [金融サービス](${GOLD.finance})`,
     `- [読書](${GOLD.books}/index.md) — 読了 ${byStatus.read?.length ?? 0}, 読書中 ${byStatus.reading?.length ?? 0}`,
     `- [映画・ドラマ](${GOLD.media}/index.md) — 視聴済み ${mByStatus.watched?.length ?? 0}`,
-    `- [プロジェクト](${GOLD.projects}) — 進行中 ${pBy.active?.length ?? 0}`,
+    `- [プロジェクト](${GOLD.projects}) — 進行中 ${pBy.active?.length ?? 0}${workActive ? `（仕事 ${workActive}）` : ""}`,
     `- [学習](${GOLD.learning}/index.md)`,
     `- [おすすめ](${GOLD.suggestions})`,
     `- [売買シート](${GOLD.trading})${plans.length ? ` — 最新 ${plans[0].fm.date ?? plans[0].updated}` : ""}`,
@@ -206,6 +213,7 @@ export function buildGold(cfg: KbConfig, db: Database): string[] {
     "## 最近のレビュー", ...list(reviews), "",
     "## 最近更新したノート", "", "| 更新 | type | ノート | 要約 |", "|---|---|---|---|",
     ...recent.map((n) => `| ${n.updated} | ${n.type} | ${link(n)} | ${n.summary} |`),
+    "", `暗号化ドメインの更新${since ? `（${since} 以降）` : ""}: ${encryptedRecent.length ? encryptedRecent.map(([d, c]) => `${d} ${c} 件`).join("、") : "なし"} — 内容は 302/303/308/310/311 と 39x を参照`,
     "", `## 件数`, ...countsByType(db),
   ].join("\n"));
 
@@ -263,6 +271,15 @@ function renewalWarnings(active: QueryResult[]): string {
     return days <= 30;
   });
   return soon.length ? "## 30 日以内に更新\n" + soon.map((s) => `- ${link(s)}: ${s.fm.next_renewal}`).join("\n") : "";
+}
+/** [domain, count] pairs for notes in encrypted domains, in domain order. */
+function countByDomain(notes: QueryResult[]): [string, number][] {
+  const c = new Map<string, number>();
+  for (const n of notes) {
+    const d = encryptedDomainOf(n.path);
+    if (d) c.set(d, (c.get(d) ?? 0) + 1);
+  }
+  return [...c.entries()].sort(([a], [b]) => a.localeCompare(b));
 }
 function countsByType(db: Database): string[] {
   const rows = db.query("SELECT type, COUNT(*) c FROM notes WHERE archived=0 AND path NOT LIKE ? GROUP BY type ORDER BY type").all(`${GOLD_PREFIX}%`) as { type: string; c: number }[];

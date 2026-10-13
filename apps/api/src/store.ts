@@ -81,6 +81,20 @@ export function claimNextJob(kinds?: string[]): Job | null {
   });
   return tx();
 }
+/**
+ * Claim every queued job of one kind at once (oldest first), so the worker can run them as a single batch: one
+ * agent run and one commit for several ingest jobs queued in the same window. Each claimed job gets the same
+ * started_at / heartbeat_at as a single claim would.
+ */
+export function claimQueuedJobs(kind: JobKind, limit = 50): Job[] {
+  const tx = store.transaction(() => {
+    const ids = (store.query("SELECT id FROM jobs WHERE status='queued' AND kind=? ORDER BY created_at LIMIT ?").all(kind, limit) as { id: string }[]).map((r) => r.id);
+    const t = now();
+    for (const id of ids) store.run("UPDATE jobs SET status='running', started_at=?, heartbeat_at=? WHERE id=?", [t, t, id]);
+    return ids.map((id) => getJob(id)!);
+  });
+  return tx();
+}
 export function appendJobLog(id: string, text: string) {
   store.run("UPDATE jobs SET log = log || ?, heartbeat_at=? WHERE id=?", [text, now(), id]);
 }

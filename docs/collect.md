@@ -12,11 +12,26 @@ launchd daily-collect（毎朝 06:30）
             │   それ以外は指数バックオフ + full jitter：基準 1 秒・上限 60 秒・最大 5 回）
             ├─ 000_inbox/collect-<source>-<from>_<to>.json（フィード）/ mail-YYYYMMDD-<category>-<id>.json（Gmail）
             └─ 900_system/cache/collect-state.json（ソースごとのカーソル。失敗したソースは前回の位置から再取得）
-launchd daily-ingest（07:00）→ worker → ingest スキル
-  ├─ kb ingest：collect-*.json → kind feed、mail-*.json → kind mail
-  ├─ kb source <id>：生 JSON ではなく 1 件 1 行の要約（collect/digest.ts）。--full で生 JSON
-  └─ collect-health-* は kb health import（月次 health_log を機械的に生成。エージェントは数値を写さない）
+launchd daily-ingest（07:00）→ enqueue.sh → POST /api/jobs（ingest, scheduled）→ worker
+  ├─ worker は claim した ingest と一緒に、その時点で queued の ingest を全部 claim して 1 束にする（下の「ingest ジョブの束ね実行」）
+  ├─ inbox が空で束が定期実行だけなら agent を起動せず skip
+  └─ ingest スキル（1 回）
+       ├─ kb ingest：collect-*.json → kind feed、mail-*.json → kind mail
+       ├─ kb source <id>：生 JSON ではなく 1 件 1 行の要約（collect/digest.ts）。--full で生 JSON
+       └─ collect-health-* は kb health import（月次 health_log を機械的に生成。エージェントは数値を写さない）
 ```
+
+## ingest ジョブの束ね実行
+
+ingest は「WebUI の投げ込み 1 件 = 1 ジョブ」で、同じ時間帯に 3 件投げれば claude が 3 回走って 3 コミットになっていた。worker はこれを 1 回にまとめる（`apps/worker/src/ingest-batch.ts` が判断、`main.ts` の `runIngest` が実行）。
+
+1. `GET /api/worker/jobs/next` で ingest を 1 件 claim したら、続けて `POST /api/worker/jobs/claim?kind=ingest` で、その時点で queued の ingest を全部 claim する（`claimQueuedJobs`、1 トランザクション、最大 50 件）。最初の 1 件が「先頭ジョブ」。
+2. `git pull --rebase` を 1 回、全ジョブの入力（WebUI のファイル・URL・メモ）を `000_inbox` に stage、agent（ingest スキル）を 1 回、`kb build` とコミットを 1 回。コミットメッセージは束の入力名を並べたもの（無ければ `ingest: inbox`）。
+3. heartbeat は束の全ジョブに 30 秒ごとに送る。進捗ログは先頭ジョブに流し、他のジョブのログには「先頭ジョブ <id> と束ねた」と 1 行だけ書く。
+4. `done` は各ジョブに返す。結果（`summary` / `error`・`commit`）は共通で、`result.batch` に束のジョブ id（先頭が最初）が入る。API は `batch` を見て、sync と「ジョブ失敗」の push を先頭ジョブの `done` でだけ行う（失敗の題名に「N 件束ね」が付く）。
+5. 束に `scheduled` なジョブが 1 つでもあれば運用ダイジェストを組み立て、`result.digest` は全ジョブに、push（`notify`）は先頭ジョブにだけ付ける。1 束 1 通。
+
+**アイドル時スキップ**: 束が定期実行（`scheduled`）だけで、stage 後の `000_inbox` が空（collector の出力も stage した入力も無い）なら agent を起動しない。`done` は `ok: true` で `result.summary` が「inbox が空のため skip」、`result.skipped: true`、commit なし。運用ダイジェストはこのときも送る（inbox が空 = collector が何も持ってこなかった、を朝に気づくため）。WebUI から投げた ingest（入力付き、または Inbox ページの「ingest を実行」）は束に入っていれば skip しない。
 
 ## ソース
 
@@ -66,15 +81,15 @@ API に VAPID 鍵があるとき（`VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY`）�
 
 | 通知 | 条件 | 内容 |
 |---|---|---|
-| `ジョブ失敗: <kind>` | `search` 以外のジョブが `ok:false` で終わったとき（agent の非 0 終了、`kb build` 失敗、例外） | ジョブ id の先頭 8 桁とエラーの先頭 140 文字（HTML は剥がす）。タップで `/jobs` |
-| `運用ダイジェスト M/D` | launchd の `daily-ingest`（07:00）が終わったとき 1 通。`enqueue.sh` は worker の資格情報で `POST /api/jobs` するので API がペイロードに `scheduled: true` を付け、worker はそれを見てダイジェストを組み立てる（WebUI から投げた ingest には付かない） | 収集: ソース別の件数（`collect-state.json` の `lastItems`）・失敗・36 時間以上走っていないソース / ノート: 新規・更新数（コミット前の `git status` の Silver）・未処理 Bronze 数・最終バックアップからの日数（`backup.log`、無ければ「未実施」）/ agent の「判断に迷った点」の件数と 1 つ目。全文はジョブの結果（`result.digest`）に入り、Jobs ページで読める。ingest が失敗したときは題名に `[失敗]` |
+| `ジョブ失敗: <kind>` | `search` 以外のジョブが `ok:false` で終わったとき（agent の非 0 終了、`kb build` 失敗、例外）。束ねた ingest は先頭ジョブの分だけ 1 通（題名に「N 件束ね」） | ジョブ id の先頭 8 桁とエラーの先頭 140 文字（HTML は剥がす）。タップで `/jobs` |
+| `運用ダイジェスト M/D` | launchd の `daily-ingest`（07:00）が終わったとき 1 通（inbox が空で agent を skip したときも）。`enqueue.sh` は worker の資格情報で `POST /api/jobs` するので API がペイロードに `scheduled: true` を付け、worker はそれを見てダイジェストを組み立てる（WebUI から投げた ingest には付かない）。定期実行が他の ingest と束ねられても 1 通で、先頭ジョブの `done` に付く | 収集: ソース別の件数（`collect-state.json` の `lastItems`）・失敗・36 時間以上走っていないソース / ノート: 新規・更新数（コミット前の `git status` の Silver）・未処理 Bronze 数・最終バックアップからの日数（`backup.log`、無ければ「未実施」）/ agent の「判断に迷った点」の件数と 1 つ目。全文はジョブの結果（`result.digest`）に入り、Jobs ページで読める。ingest が失敗したときは題名に `[失敗]` |
 | `本日の売買シート` | `trade-plan` スキルが当日のシートを作ったとき（従来どおり） | — |
 
 ダイジェストの組み立ては `packages/core/src/ops.ts`（`buildOpsDigest` / `formatOpsDigest`）。collector 側は `runCollectors` が成功したソースの `lastItems` を `collect-state.json` に残す。
 
 ### worker の死活
 
-- worker は `search` 以外のジョブを実行中、30 秒ごとに `POST /api/worker/jobs/:id/heartbeat` を送る（`claude -p` は終わるまで何も出力しないので、進捗ログだけでは生存が分からない）。進捗ログ（`/log`）も heartbeat 扱い。
+- worker は `search` 以外のジョブを実行中、30 秒ごとに `POST /api/worker/jobs/:id/heartbeat` を送る（`claude -p` は終わるまで何も出力しないので、進捗ログだけでは生存が分からない）。進捗ログ（`/log`）も heartbeat 扱い。束ねた ingest は全ジョブに送る。
 - API の `requeueStale` は「最後の heartbeat から 15 分」無音のジョブを `queued` に戻す（以前は開始から 60 分固定）。長い skill ジョブでも報告が続く限り二重実行されない。heartbeat を送らない古い worker が掴んだジョブは開始時刻で判定される。
 - `worker.log` の各行には時刻が付く。API のエラーはステータスコードと本文の先頭 200 文字（HTML タグは剥がす）だけを記録する。
 

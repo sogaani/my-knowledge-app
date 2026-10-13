@@ -10,7 +10,7 @@ import { env } from "./env";
 import { authenticate, requireUser, requireWorker, requireInboxWriter, requireUserOrWorker, type Principal } from "./auth";
 import { cfg, reg, db, sync, head, rebuildGold, commitKb, cachedLint, pushState, unsavedCount, isGitRepo } from "./kb";
 import {
-  createJob, getJob, listJobs, claimNextJob, appendJobLog, touchJob, finishJob, requeueStale, pruneSearchJobs, waitJobEvent,
+  createJob, getJob, listJobs, claimNextJob, claimQueuedJobs, appendJobLog, touchJob, finishJob, requeueStale, pruneSearchJobs, waitJobEvent,
   addInboxItem, inboxItemNameExists, inboxItemsForJob, getInboxItem, markInboxFetched, addChat, listChat, newId, type JobKind,
   addPushSubscription, deletePushSubscription, listPushSubscriptions,
 } from "./store";
@@ -304,6 +304,16 @@ w.get("/jobs/next", async (c) => {
     await waitJobEvent("queued", deadline - Date.now());
   }
 });
+/**
+ * Claim every queued job of one kind in one go. The worker calls this right after /jobs/next handed it an ingest, so
+ * all ingest jobs waiting at that moment are staged together and run through the agent once (see docs/collect.md).
+ */
+w.post("/jobs/claim", (c) => {
+  const kind = c.req.query("kind") ?? "";
+  if (!["ingest", "ask", "recommend", "skill"].includes(kind)) return c.json({ error: "bad kind" }, 400);
+  const jobs = claimQueuedJobs(kind as JobKind).map((j) => ({ ...j, inbox: j.kind === "ingest" ? inboxItemsForJob(j.id).map(({ path, ...i }) => i) : [] }));
+  return c.json({ jobs });
+});
 w.get("/inbox/:id", (c) => {
   const it = getInboxItem(c.req.param("id") ?? "");
   if (!it) return c.json({ error: "not found" }, 404);
@@ -317,25 +327,39 @@ w.post("/jobs/:id/heartbeat", (c) => { touchJob(c.req.param("id") ?? ""); return
 /**
  * Job finished. Pushes (when VAPID is configured): a failure (any kind but search), the `notify` the worker attached
  * (the morning digest after a scheduled ingest), and the trade-plan sheet (notifyJobDone).
+ * Jobs the worker ran as one batch report `result.batch` (the ids, lead first): they share one commit and one outcome,
+ * so the sync and the failure push happen once, on the lead job's `done`.
  */
 w.post("/jobs/:id/done", async (c) => {
   const id = c.req.param("id") ?? "";
   const b = (await c.req.json()) as { ok: boolean; result?: unknown; commit?: string | null; answer?: string; sources?: string[]; notify?: PushPayload };
   finishJob(id, b.ok, b.result ?? b.answer ?? null, b.commit);
   const job = getJob(id);
+  const batch = batchOf(b.result);
+  const lead = !batch || batch[0] === id;
   if (job?.kind === "ask") addChat("assistant", b.ok ? (b.answer ?? "") : `失敗: ${JSON.stringify(b.result)}`, id, b.sources ?? []);
-  if (b.commit) await sync(`job:${id}`);
-  else if (b.ok && job?.kind !== "ask" && job?.kind !== "search") await sync(`job:${id}`);
+  if (lead) {
+    if (b.commit) await sync(`job:${id}`);
+    else if (b.ok && job?.kind !== "ask" && job?.kind !== "search") await sync(`job:${id}`);
+  }
   if (job) {
     const payload = JSON.parse(job.payload) as Record<string, unknown>;
     const pushes: PushPayload[] = [];
-    if (!b.ok && job.kind !== "search") pushes.push({ title: `ジョブ失敗: ${jobLabel(job.kind, payload)}`, body: `${id.slice(0, 8)} · ${errorHead(b.result) || "(no error text)"}`, url: "/jobs", tag: `job-failed-${id}` });
+    if (!b.ok && job.kind !== "search" && lead) {
+      const n = batch && batch.length > 1 ? ` (${batch.length} 件束ね)` : "";
+      pushes.push({ title: `ジョブ失敗: ${jobLabel(job.kind, payload)}${n}`, body: `${id.slice(0, 8)} · ${errorHead(b.result) || "(no error text)"}`, url: "/jobs", tag: `job-failed-${id}` });
+    }
     if (b.notify?.title) pushes.push({ url: "/jobs", tag: "ops-digest", ...b.notify, body: String(b.notify.body ?? "").slice(0, 1000) });
     for (const p of pushes) sendPushToAll(p).then((r) => console.log(`push ${p.tag}: sent ${r.sent}, removed ${r.removed}, failed ${r.failed}`), (e) => console.error("push:", e));
     if (b.ok) notifyJobDone(job.kind, payload).catch((e) => console.error("push:", e));
   }
   return c.json({ ok: true });
 });
+/** `result.batch` of a job the worker ran together with others (ids, lead first); null for a job run on its own. */
+function batchOf(result: unknown): string[] | null {
+  const b = result && typeof result === "object" ? (result as { batch?: unknown }).batch : undefined;
+  return Array.isArray(b) && b.length > 1 && b.every((x) => typeof x === "string") ? (b as string[]) : null;
+}
 const jobLabel = (kind: string, payload: Record<string, unknown>) => (kind === "skill" && payload.name ? `skill ${String(payload.name)}` : kind) + (payload.scheduled ? " (定期)" : "");
 /** Push notifications for jobs people wait for. trade-plan: only when today's (JST) sheet exists, so a 休場 run stays silent. */
 async function notifyJobDone(kind: string, payload: Record<string, unknown>) {

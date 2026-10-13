@@ -58,3 +58,34 @@ describe("requeueStale", () => {
     s.finishJob(job.id, true, null);
   });
 });
+
+describe("claimQueuedJobs", () => {
+  test("claims every queued job of the kind at once, oldest first, and leaves other kinds and running jobs alone", () => {
+    const a = s.createJob("ingest", { items: [] });
+    const other = s.createJob("skill", { name: "x" });
+    const b = s.createJob("ingest", { scheduled: true });
+    const c = s.createJob("ingest", { items: [] });
+    // the lead claim the worker gets from /jobs/next
+    expect(s.claimNextJob(["ingest"])?.id).toBe(a.id);
+    const rest = s.claimQueuedJobs("ingest");
+    expect(rest.map((j) => j.id)).toEqual([b.id, c.id]);
+    for (const j of rest) {
+      expect(j.status).toBe("running");
+      expect(j.started_at).toBeTruthy();
+      expect(j.heartbeat_at).toBeTruthy();
+    }
+    expect(s.getJob(other.id)?.status).toBe("queued");
+    // nothing left to claim: empty, and the lead was not re-claimed
+    expect(s.claimQueuedJobs("ingest")).toEqual([]);
+    expect(s.claimNextJob(["ingest"])).toBeNull();
+    expect(s.claimNextJob(["skill"])?.id).toBe(other.id);
+    for (const id of [a.id, b.id, c.id, other.id]) s.finishJob(id, true, null);
+  });
+
+  test("respects the limit", () => {
+    const ids = [1, 2, 3].map(() => s.createJob("ingest", {}).id);
+    expect(s.claimQueuedJobs("ingest", 2).map((j) => j.id)).toEqual(ids.slice(0, 2));
+    expect(s.claimQueuedJobs("ingest").map((j) => j.id)).toEqual(ids.slice(2));
+    for (const id of ids) s.finishJob(id, true, null);
+  });
+});

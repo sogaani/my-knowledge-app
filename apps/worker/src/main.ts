@@ -9,6 +9,7 @@ import {
   LAYOUT, SILVER_PREFIX, loadConfig, git, gitCommitPush, gitStatusPaths, hasUpstream, openDb, indexNotes, parseFilters, search, makeEmbedder, listInbox,
   clipError, errorHead, buildOpsDigest, formatOpsDigest, renderOpsDigest, type SearchMode,
 } from "@kb/core";
+import { planIngest, ingestCommitMessage, ingestDoneBodies, ingestFailureBodies, type IngestOutcome } from "./ingest-batch";
 
 const API = (process.env.KB_API_URL ?? "http://127.0.0.1:8787").replace(/\/$/, "");
 const cfg = loadConfig(process.env.KB_ROOT);
@@ -78,15 +79,88 @@ async function stageInbox(job: Job) {
 let searchDb: ReturnType<typeof openDb> | undefined;
 let embedder: ReturnType<typeof makeEmbedder> | undefined;
 
+const parsePayload = (job: Job) => JSON.parse(job.payload || "{}") as Record<string, unknown>;
+const short = (id: string) => id.slice(0, 8);
+
 async function handle(job: Job) {
-  const payload = JSON.parse(job.payload || "{}") as Record<string, unknown>;
-  info(`[job ${job.id.slice(0, 8)}] ${job.kind}${payload.scheduled ? " (scheduled)" : ""}`);
+  const payload = parsePayload(job);
+  info(`[job ${short(job.id)}] ${job.kind}${payload.scheduled ? " (scheduled)" : ""}`);
+  if (job.kind === "ingest") return handleIngest(job);
   const heartbeat = job.kind === "search" ? null : setInterval(() => api(`/jobs/${job.id}/heartbeat`, { method: "POST" }).catch(() => {}), HEARTBEAT_MS);
   try {
     await run(job, payload);
   } finally {
     if (heartbeat) clearInterval(heartbeat);
   }
+}
+
+/** Every ingest job queued right now, so one agent run covers them all. An API without the route (older) yields none. */
+async function claimQueued(kind: string): Promise<Job[]> {
+  try {
+    const res = await api(`/jobs/claim?kind=${kind}`, { method: "POST" });
+    return res ? ((await res.json()) as { jobs: Job[] }).jobs : [];
+  } catch (e) {
+    warn(`claim ${kind}: ${(e as Error).message}`);
+    return [];
+  }
+}
+
+async function handleIngest(lead: Job) {
+  const jobs = [lead, ...(await claimQueued("ingest"))];
+  if (jobs.length > 1) info(`[job ${short(lead.id)}] batching ${jobs.length} ingest jobs: ${jobs.slice(1).map((j) => short(j.id)).join(" ")}`);
+  const heartbeat = setInterval(() => { for (const j of jobs) api(`/jobs/${j.id}/heartbeat`, { method: "POST" }).catch(() => {}); }, HEARTBEAT_MS);
+  try {
+    await runIngest(jobs);
+  } finally {
+    clearInterval(heartbeat);
+  }
+}
+
+/**
+ * One agent run for a batch of ingest jobs: pull once, stage every job's inputs, run the ingest skill once, commit
+ * once, then answer `done` for each job (the lead job also carries the ops digest when the batch holds the
+ * scheduled run). An idle scheduled run (nothing in the inbox) reports itself as skipped without starting the agent.
+ */
+async function runIngest(jobs: Job[]) {
+  const lead = jobs[0]!;
+  const tag = `[job ${short(lead.id)}${jobs.length > 1 ? ` +${jobs.length - 1}` : ""}]`;
+  let bodies: Map<string, Record<string, unknown>>;
+  let outcome: IngestOutcome | undefined;
+  try {
+    if (await hasUpstream(cfg.root)) await git(cfg.root, "pull", "--rebase", "--quiet").catch((e) => log(lead.id, `pull: ${e.message}\n`));
+    for (const j of jobs) await stageInbox(j);
+    const plan = planIngest(jobs.map((j) => ({ id: j.id, scheduled: !!parsePayload(j).scheduled, inbox: j.inbox ?? [] })), listInbox(cfg).map((p) => basename(p)));
+    for (const j of jobs.slice(1)) await log(j.id, `bundled with job ${short(lead.id)}: ${jobs.length} ingest jobs, one agent run (log is on the lead job)\n`);
+    let changes: { status: string; path: string }[] = [];
+    if (plan.skip) {
+      info(`${tag} inbox empty, agent skipped`);
+      await log(lead.id, "inbox empty: agent skipped\n");
+      outcome = { ok: true, skipped: true, commit: null };
+    } else {
+      const { out, code } = await runAgent(lead.id, ["ingest"]);
+      await kb("validate", "--quiet").catch((e) => log(lead.id, `${e.message}\n`));
+      await kb("build");
+      changes = plan.scheduled ? await gitStatusPaths(cfg.root, [LAYOUT.silver]).catch(() => []) : [];
+      const commit = await commitAll(ingestCommitMessage(plan));
+      outcome = { ok: code === 0, summary: tail(out), commit };
+      if (plan.scheduled) outcome.agentOutput = out;
+    }
+    // One digest per scheduled morning run, whatever the batch size: what was waiting before the agent ate it.
+    if (plan.scheduled) {
+      try {
+        const digest = buildOpsDigest(cfg, { inboxNames: plan.inboxNames, agentOutput: outcome.agentOutput ?? "", agentOk: outcome.ok, changes });
+        outcome.digest = { text: renderOpsDigest(digest), notify: formatOpsDigest(digest) };
+      } catch (e) {
+        warn(`${tag} digest: ${(e as Error).message}`);
+      }
+    }
+    bodies = ingestDoneBodies(plan, outcome);
+  } catch (e) {
+    bodies = ingestFailureBodies(jobs.map((j) => j.id), (e as Error).message);
+  }
+  for (const [id, body] of bodies) await api(`/jobs/${id}/done`, { method: "POST", body: JSON.stringify(body) });
+  const first = bodies.get(lead.id)!;
+  info(`${tag} ${first.ok ? (outcome?.skipped ? "skipped" : "done") : `FAILED: ${errorHead(first.result, 200)}`}`);
 }
 
 async function run(job: Job, payload: Record<string, unknown>) {
@@ -107,28 +181,6 @@ async function run(job: Job, payload: Record<string, unknown>) {
         }, { embedder });
         info(`[job ${job.id.slice(0, 8)}] search "${String(payload.query ?? "").slice(0, 40)}" -> ${res.hits.length} hits (${res.mode}${res.degraded ? ", degraded: " + res.degraded : ""}) ${Date.now() - t0}ms`);
         body = { ok: true, result: res };
-        break;
-      }
-      case "ingest": {
-        await stageInbox(job);
-        // The scheduled (launchd 07:00) ingest ends with one ops digest push: note what was waiting before the agent eats it.
-        const scheduled = !!payload.scheduled;
-        const inboxNames = scheduled ? listInbox(cfg).map((p) => basename(p)) : [];
-        const { out, code } = await runAgent(job.id, ["ingest"]);
-        await kb("validate", "--quiet").catch((e) => log(job.id, `${e.message}\n`));
-        await kb("build");
-        const changes = scheduled ? await gitStatusPaths(cfg.root, [LAYOUT.silver]).catch(() => []) : [];
-        const commit = await commitAll(`ingest: ${(job.inbox ?? []).map((i) => i.name).join(", ") || "inbox"}`);
-        body = { ok: code === 0, result: { summary: tail(out) }, commit };
-        if (scheduled) {
-          try {
-            const digest = buildOpsDigest(cfg, { inboxNames, agentOutput: out, agentOk: code === 0, changes });
-            (body.result as Record<string, unknown>).digest = renderOpsDigest(digest);
-            body.notify = formatOpsDigest(digest);
-          } catch (e) {
-            warn(`[job ${job.id.slice(0, 8)}] digest: ${(e as Error).message}`);
-          }
-        }
         break;
       }
       case "ask": {

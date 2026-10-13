@@ -132,7 +132,7 @@ function kb() {
     $id: "kb:location_log", "x-kb": { folder: "200_silver/211_location", entity: "file" }, allOf: [{ $ref: "kb:common" }],
     properties: { type: { const: "location_log" }, status: { enum: ["open", "closed"] }, month: { type: "string" } },
   }));
-  w("800_templates/location_log.md", "---\ntype: location_log\ntitle: \"{{title}}\"\nstatus: open\ntags: []\ncreated: {{today}}\nupdated: {{today}}\nsources: []\nrelated: []\nsummary: \"\"\nmonth: \"\"\n---\n\n# {{title}} 滞在記録\n\n## 日別\n\n## メモ\n");
+  w("800_templates/location_log.md", "---\ntype: location_log\ntitle: \"{{title}}\"\nstatus: open\ntags: []\ncreated: {{today}}\nupdated: {{today}}\nsources: []\nrelated: []\nsummary: \"\"\nmonth: \"\"\n---\n\n# {{title}}\n\n## 日別\n\n## メモ\n");
   mkdirSync(join(root, "200_silver", "211_location"), { recursive: true });
   mkdirSync(join(root, "000_inbox"), { recursive: true });
   process.env.KB_DB = join(root, "kb.sqlite");

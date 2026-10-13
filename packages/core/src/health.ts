@@ -8,7 +8,7 @@ import { join } from "node:path";
 import type { Database } from "bun:sqlite";
 import { today, type KbConfig } from "./config";
 import { bronzeDir, markProcessed, readMeta, walkBronze } from "./bronze";
-import { createNote } from "./create";
+import { createNote, monthlyTitle } from "./create";
 import { parseNote, stringifyNote } from "./frontmatter";
 import { runQuery } from "./query";
 import type { SchemaRegistry } from "./schema";
@@ -75,7 +75,7 @@ export function importHealth(cfg: KbConfig, reg: SchemaRegistry, db: Database, b
     const existing = runQuery(db, { filters: [{ field: "type", op: "=", value: "health_log" }, { field: "month", op: "=", value: month }] })[0];
     let rel = existing?.path, created = false;
     if (!rel || !existsSync(join(cfg.root, rel))) {
-      rel = createNote(cfg, reg, db, { type: "health_log", title: month, set: { month } });
+      rel = createNote(cfg, reg, db, { type: "health_log", title: monthlyTitle("health_log", month), set: { month } });
       created = true;
     }
     const abs = join(cfg.root, rel);

@@ -7,6 +7,7 @@ import { walkNotes, type Note } from "./notes";
 import type { SchemaRegistry } from "./schema";
 import { listInbox, mailCategory, processState, readMeta, rewriteProcessedTo, walkBronze, type ProcessState } from "./bronze";
 import { SUGGESTION_SOURCE_PREFIX, relLink, suggestionIds } from "./suggest";
+import { MONTHLY_TYPES, isBareMonthTitle, monthlyTitle } from "./create";
 
 export interface Issue { level: "error" | "warn"; path: string; msg: string }
 
@@ -25,6 +26,8 @@ export function validateAll(cfg: KbConfig, reg: SchemaRegistry): Issue[] {
       issues.push({ level: "error", path: n.path, msg: `type ${n.type} belongs in ${def.folder}/` });
     }
     if (!n.summary) issues.push({ level: "warn", path: n.path, msg: "summary is empty" });
+    // monthly notes name their type in the title: four domains share the month, and a list of `2026-10`s tells nothing
+    if (isBareMonthTitle(n.type, n.title)) issues.push({ level: "warn", path: n.path, msg: `monthly note title should name its type: "${monthlyTitle(n.type, n.title.trim())}"` });
     // lifecycle: a merged / superseded note names its successor (a note-relative path, like `related`), and the successor exists
     const successor = supersededBy(n);
     if (successor) {
@@ -169,6 +172,8 @@ export function lint(cfg: KbConfig, db: Database, opts: { staleDays?: number } =
   const now = Date.now();
   const days = (iso: string) => (now - new Date(iso).getTime()) / 86400000;
   const inboxStale = listInbox(cfg).filter((f) => days(statSync(f).mtime.toISOString()) > 3).map((f) => basename(f));
+  // inbound links from Silver notes and from Gold (`kb build` lists every book / ledger / log in its views; a note on a
+  // Gold page is not orphaned). Gold links are indexed from the files on disk, so run `kb build` before judging.
   const linked = new Set((db.query("SELECT DISTINCT dst FROM links").all() as { dst: string }[]).map((r) => r.dst));
   const rows = db.query("SELECT path, type, status, updated, fm FROM notes WHERE archived=0 AND path LIKE ?").all(`${SILVER_PREFIX}%`) as
     { path: string; type: string; status: string; updated: string; fm: string }[];
@@ -182,7 +187,7 @@ export function lint(cfg: KbConfig, db: Database, opts: { staleDays?: number } =
       const field = TAG_FIELDS.find((f) => typeof fm[f] === "string" && String(fm[f]).toLowerCase() === t.toLowerCase());
       if (field) redundantTags.push(`${r.path}: ${t} (= ${field})`);
     }
-    if (!linked.has(r.path) && !["review", "trade_plan"].includes(r.type)) orphans.push(r.path);
+    if (!linked.has(r.path) && !ORPHAN_EXEMPT.has(r.type)) orphans.push(r.path);
     if (["project", "learning"].includes(r.type) && r.status === "active" && r.updated && days(r.updated) > (opts.staleDays ?? 30)) stale.push(r.path);
     if (r.type === "subscription" && r.status === "active" && fm.next_renewal && days(String(fm.next_renewal)) > -14) renewals.push(`${r.path} (${fm.next_renewal})`);
     if (["done", "cancelled", "closed", "merged"].includes(r.status)) archiveCandidates.push(r.path);
@@ -192,6 +197,12 @@ export function lint(cfg: KbConfig, db: Database, opts: { staleDays?: number } =
   const unprocessedBronze = metas.filter((m) => processState(m) === "unprocessed").map((m) => m.id);
   return { inboxStale, orphans, stale, renewals, archiveCandidates, unprocessedBronze, singleUseTags, redundantTags, bronze: summarizeBronze(metas) };
 }
+
+/**
+ * Types nobody links to by design: reviews and daily trade sheets are read in sequence, and the monthly logs
+ * (ledger / health / location / calendar) are containers an importer fills; `related` to them says nothing.
+ */
+const ORPHAN_EXEMPT = new Set(["review", "trade_plan", ...Object.keys(MONTHLY_TYPES)]);
 
 /** Fields that hold what a tag must not repeat: tags are for topics that cut across domains, not genre / platform / origin. */
 const TAG_FIELDS = ["genre", "subgenre", "platform", "kind"] as const;

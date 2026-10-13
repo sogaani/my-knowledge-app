@@ -14,6 +14,22 @@ export interface CreateOpts {
   folder?: string; // override target subfolder (e.g. for work projects: 200_silver/207_work)
 }
 
+/**
+ * Monthly log types (one note per month) and the label their title carries: `2026-10 家計`, not a bare `2026-10` that
+ * four domains would share (search results and lists could not tell them apart). The file stays `YYYY-MM.md`.
+ */
+export const MONTHLY_TYPES: Record<string, string> = { ledger: "家計", health_log: "健康記録", location_log: "滞在記録", calendar_log: "予定" };
+const MONTH_RE = /^\d{4}-\d{2}$/;
+/** Title of a monthly note: `YYYY-MM <label>` (the month alone for a type that is not monthly). */
+export function monthlyTitle(type: string, month: string): string {
+  const label = MONTHLY_TYPES[type];
+  return label ? `${month} ${label}` : month;
+}
+/** True when a monthly note's title is a bare `YYYY-MM` (the pre-convention form). */
+export function isBareMonthTitle(type: string, title: string): boolean {
+  return !!MONTHLY_TYPES[type] && MONTH_RE.test(title.trim());
+}
+
 export class DuplicateError extends Error {
   constructor(public matches: { path: string; title: string }[]) {
     super(`possible duplicate: ${matches.map((m) => m.path).join(", ")}`);
@@ -24,21 +40,29 @@ export class DuplicateError extends Error {
 export function createNote(cfg: KbConfig, reg: SchemaRegistry, db: Database | null, o: CreateOpts): string {
   const def = reg.get(o.type);
   if (!def) throw new Error(`unknown type ${o.type}`);
+  // monthly types: `kb new ledger "2026-10"` becomes title `2026-10 家計`, month 2026-10, file 2026-10.md
+  let title = o.title.trim(), slug = slugify(title), set = o.set;
+  if (MONTHLY_TYPES[o.type]) {
+    const month = typeof set?.month === "string" && MONTH_RE.test(set.month) ? set.month : (/^(\d{4}-\d{2})(\s|$)/.exec(title)?.[1] ?? "");
+    if (!month) throw new Error(`${o.type} is a monthly note: kb new ${o.type} "${monthlyTitle(o.type, "YYYY-MM")}"`);
+    if (MONTH_RE.test(title)) title = monthlyTitle(o.type, month);
+    slug = month;
+    set = { ...set, month };
+  }
   if (db && !o.force) {
-    const dups = findDuplicates(db, o.type, o.title, o.set);
+    const dups = findDuplicates(db, o.type, title, set);
     if (dups.length) throw new DuplicateError(dups);
   }
   const tplPath = join(cfg.templates, `${o.type}.md`);
   if (!existsSync(tplPath)) throw new Error(`template missing: ${tplPath}`);
-  const vars = { title: o.title, today: today() };
+  const vars = { title, today: today() };
   let text = fillTemplate(readFileSync(tplPath, "utf8"), vars);
-  if (o.set && Object.keys(o.set).length) {
+  if (set && Object.keys(set).length) {
     const { fm, body } = parseNote(text);
-    Object.assign(fm, reg.coerce(o.type, o.set));
+    Object.assign(fm, reg.coerce(o.type, set));
     text = stringifyNote(fm, body);
   }
   const folder = join(cfg.root, o.folder ?? def.folder);
-  const slug = slugify(o.title);
   let absNote: string;
   if (def.entity === "folder") {
     const dirName = `${today().slice(0, 7)}_${slug}`;
@@ -68,6 +92,7 @@ export function findDuplicates(db: Database, type: string, title: string, set?: 
   for (const r of rows) {
     const fm = JSON.parse(r.fm) as Record<string, unknown>;
     const same = norm(r.title) === t
+      || (set?.month && fm.month && String(fm.month) === String(set.month)) // monthly types: one note per month
       || (set?.isbn && fm.isbn && String(fm.isbn) === String(set.isbn))
       || (set?.service && fm.service && norm(String(fm.service)) === norm(String(set.service)));
     if (same) out.push({ path: r.path, title: r.title });

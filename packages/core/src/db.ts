@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import type { KbConfig } from "./config";
+import { GOLD_PREFIX, SILVER_PREFIX, type KbConfig } from "./config";
 import { readNote, toRel, walkNotes, type Note } from "./notes";
 
 export interface NoteRow {
@@ -49,9 +49,11 @@ export function openDb(cfg: KbConfig): Database {
 const LINK_RE = /\]\(([^)\s#]+\.md)(?:#[^)]*)?\)/g;
 
 /**
- * Full or incremental re-index of Silver + Gold. Returns counts.
+ * Full or incremental re-index of Silver. Returns counts.
  * `paths` (repo-relative files or folders, e.g. from `git diff --name-only`) limits the walk to those notes,
  * so a single edit does not re-read every file.
+ * Gold never enters `notes` / the FTS (it is derived and must not show up in search); only its links into Silver go
+ * into `links`, so "listed in a Gold view" counts as a backlink (lint orphans, the WebUI's 被リンク).
  */
 export function indexNotes(cfg: KbConfig, db: Database, opts: { full?: boolean; paths?: string[] } = {}) {
   const existing = new Map<string, number>(
@@ -66,6 +68,7 @@ export function indexNotes(cfg: KbConfig, db: Database, opts: { full?: boolean; 
   const delFts = db.prepare("DELETE FROM notes_fts WHERE path=?");
   const insFts = db.prepare("INSERT INTO notes_fts(path,title,summary,tags,body) VALUES(?,?,?,?,?)");
   const delLinks = db.prepare("DELETE FROM links WHERE src=?");
+  const delGoldLinks = db.prepare("DELETE FROM links WHERE src LIKE ?");
   const insLink = db.prepare("INSERT OR IGNORE INTO links(src,dst) VALUES(?,?)");
 
   const scope = opts.paths ? notesUnder(cfg, opts.paths) : { notes: [...walkNotes(cfg)], covers: () => true };
@@ -82,6 +85,9 @@ export function indexNotes(cfg: KbConfig, db: Database, opts: { full?: boolean; 
       delLinks.run(n.path);
       for (const dst of extractLinks(n)) insLink.run(n.path, dst);
     }
+    // Gold is small (a few dozen files) and rewritten whole by `kb build`: re-extract its links every time
+    delGoldLinks.run(`${GOLD_PREFIX}%`);
+    for (const [src, dst] of goldLinks(cfg)) insLink.run(src, dst);
     for (const p of existing.keys()) {
       if (!seen.has(p) && scope.covers(p)) {
         db.run("DELETE FROM notes WHERE path=?", [p]);
@@ -124,8 +130,26 @@ function notesUnder(cfg: KbConfig, paths: string[]): { notes: Note[]; covers: (p
   return { notes, covers: (p) => files.has(p) || dirs.some((d) => p.startsWith(`${d}/`)) };
 }
 
+/** [gold path, silver path] for every markdown link from a Gold file into Silver (Gold has no frontmatter, so it is not a Note). */
+export function goldLinks(cfg: KbConfig): [string, string][] {
+  const out: [string, string][] = [];
+  const walk = (dir: string) => {
+    if (!existsSync(dir)) return;
+    for (const ent of readdirSync(dir, { withFileTypes: true })) {
+      const abs = join(dir, ent.name);
+      if (ent.isDirectory()) walk(abs);
+      else if (ent.name.endsWith(".md")) {
+        const src = toRel(cfg, abs);
+        for (const dst of extractLinks({ path: src, body: readFileSync(abs, "utf8"), fm: {} })) if (dst.startsWith(SILVER_PREFIX)) out.push([src, dst]);
+      }
+    }
+  };
+  walk(cfg.gold);
+  return out;
+}
+
 /** Resolve markdown links, `related:` entries and `superseded_by` to repo-relative paths. */
-export function extractLinks(n: Note): string[] {
+export function extractLinks(n: Pick<Note, "path" | "body" | "fm">): string[] {
   const base = n.path.split("/").slice(0, -1);
   const out = new Set<string>();
   const resolveRel = (target: string) => {

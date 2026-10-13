@@ -7,6 +7,7 @@ import { indexNotes, openDb } from "./db";
 import { parseNote } from "./frontmatter";
 import { runQuery } from "./query";
 import { archiveNote, lint, summarizeBronze, validateAll, validateBronze } from "./maintain";
+import { DuplicateError, createNote, monthlyTitle } from "./create";
 import { buildGold, stockThemes } from "./build";
 import { mailCategory, readMeta } from "./bronze";
 import { SchemaRegistry } from "./schema";
@@ -30,6 +31,8 @@ function fixtureRoot(): string {
   schema("book", "200_silver/204_books");
   schema("review", "200_silver/208_reviews");
   schema("ledger", "200_silver/203_finance");
+  schema("health_log", "200_silver/210_health");
+  w("800_templates/ledger.md", '---\ntype: ledger\ntitle: "{{title}}"\nstatus: open\ntags: []\ncreated: {{today}}\nupdated: {{today}}\nsources: []\nrelated: []\nsummary: ""\nmonth: ""\n---\n\n# {{title}}\n');
   w("900_system/schemas/project.json", JSON.stringify({
     $id: "kb:project", "x-kb": { folder: "200_silver/206_projects", entity: "folder" }, allOf: [{ $ref: "kb:common" }],
     properties: { type: { const: "project" }, status: { enum: ["idea", "active", "done", "cancelled", "merged"] } },
@@ -40,14 +43,15 @@ function fixtureRoot(): string {
   const base = { status: "open", created: "2026-10-01", summary: "s" };
   // tags: `mystery` repeats genre, `kobo` repeats platform, `sailing` is used once, `horror` twice
   note("200_silver/204_books/本A.md", { ...base, type: "book", title: "本A", updated: "2026-10-10", tags: ["mystery", "kobo", "horror"], genre: "mystery", platform: "kobo" });
-  note("200_silver/204_books/本B.md", { ...base, type: "book", title: "本B", updated: "2026-10-10", tags: ["sailing", "horror"], genre: "nonfiction" });
+  note("200_silver/204_books/本B.md", { ...base, type: "book", title: "本B", status: "want", updated: "2026-10-10", tags: ["sailing", "horror"], genre: "nonfiction" });
   // market: themes carry the stock link in `tickers`; 株B also names a theme itself
   note("200_silver/200_market/株A.md", { ...base, type: "stock", title: "株A", status: "holding", updated: "2026-10-10", code: "7974", market: "JP" });
   note("200_silver/200_market/株B.md", { ...base, type: "stock", title: "株B", status: "watch", updated: "2026-10-10", code: "1605", market: "JP", themes: ["テーマ甲"] });
   note("200_silver/200_market/株C.md", { ...base, type: "stock", title: "株C", status: "watch", updated: "2026-10-10", code: "9999", market: "JP" });
   note("200_silver/200_market/テーマ甲.md", { ...base, type: "theme", title: "テーマ甲", status: "active", updated: "2026-10-10", tickers: ["7974", "9697"] });
   note("200_silver/200_market/テーマ乙.md", { ...base, type: "theme", title: "テーマ乙", status: "active", updated: "2026-10-10", tickers: ["1605", "7974"] });
-  note("200_silver/203_finance/2026-10.md", { ...base, type: "ledger", title: "2026-10", updated: "2026-10-12", summary: "SECRET-SUMMARY" });
+  note("200_silver/203_finance/2026-10.md", { ...base, type: "ledger", title: "2026-10 家計", month: "2026-10", updated: "2026-10-12", summary: "SECRET-SUMMARY" });
+  note("200_silver/210_health/2026-10.md", { ...base, type: "health_log", title: "2026-10", month: "2026-10", updated: "2026-10-12" });
   note("200_silver/208_reviews/W41.md", { ...base, type: "review", title: "W41", updated: "2026-10-11", related: ["../203_finance/2026-10.md"] }, "\n[本](../204_books/本A.md) と [台帳](../203_finance/2026-10.md)\n");
   note("200_silver/206_projects/2026-10_個人/README.md", { ...base, type: "project", title: "個人", status: "active", updated: "2026-10-09" });
   note("200_silver/206_projects/2026-10_まとめ/README.md", { ...base, type: "project", title: "まとめ", status: "active", updated: "2026-10-09" });
@@ -83,6 +87,66 @@ describe("validateAll", () => {
   });
 });
 
+describe("validateAll monthly titles", () => {
+  test("warns on a bare YYYY-MM title of a monthly type and names the expected one", () => {
+    const cfg = loadConfig(fixtureRoot());
+    const warns = validateAll(cfg, new SchemaRegistry(cfg)).filter((i) => i.msg.startsWith("monthly note title"));
+    expect(warns).toEqual([{ level: "warn", path: "200_silver/210_health/2026-10.md", msg: 'monthly note title should name its type: "2026-10 健康記録"' }]);
+    expect(monthlyTitle("ledger", "2026-11")).toBe("2026-11 家計");
+    expect(monthlyTitle("book", "2026-11")).toBe("2026-11");
+  });
+});
+
+describe("createNote monthly", () => {
+  test("a bare month becomes `YYYY-MM <label>`, month is set, the file stays YYYY-MM.md, and the month is the duplicate key", () => {
+    const root = fixtureRoot();
+    process.env.KB_DB = join(root, "kb.sqlite");
+    const cfg = loadConfig(root);
+    delete process.env.KB_DB;
+    const reg = new SchemaRegistry(cfg);
+    const db = openDb(cfg);
+    indexNotes(cfg, db);
+    const p = createNote(cfg, reg, db, { type: "ledger", title: "2026-11" });
+    expect(p).toBe("200_silver/203_finance/2026-11.md");
+    const fm = parseNote(readFileSync(join(cfg.root, p), "utf8")).fm;
+    expect(fm.title).toBe("2026-11 家計");
+    expect(fm.month).toBe("2026-11");
+    indexNotes(cfg, db);
+    // the existing October note carries the old bare title, yet its month makes it the duplicate
+    expect(() => createNote(cfg, reg, db, { type: "ledger", title: "2026-10 家計" })).toThrow(DuplicateError);
+    expect(() => createNote(cfg, reg, db, { type: "ledger", title: "2026-11" })).toThrow(DuplicateError);
+    expect(() => createNote(cfg, reg, db, { type: "ledger", title: "家計" })).toThrow(/monthly note/);
+    expect(validateAll(cfg, reg).filter((i) => i.path === p && i.level === "error")).toEqual([]);
+  });
+});
+
+describe("lint orphans", () => {
+  test("a note listed on a Gold page is not an orphan; Gold itself stays out of notes and the FTS", () => {
+    const root = fixtureRoot();
+    process.env.KB_DB = join(root, "kb.sqlite");
+    const cfg = loadConfig(root);
+    delete process.env.KB_DB;
+    const db = openDb(cfg);
+    indexNotes(cfg, db);
+    // no Gold yet: only the review's links count (本A and the ledger); reviews and monthly logs are exempt
+    const before = lint(cfg, db).orphans;
+    expect(before).toContain("200_silver/204_books/本B.md");
+    for (const p of ["200_silver/204_books/本A.md", "200_silver/210_health/2026-10.md", "200_silver/208_reviews/W41.md"]) expect(before).not.toContain(p);
+    buildGold(cfg, db);
+    indexNotes(cfg, db);
+    const orphans = lint(cfg, db).orphans;
+    for (const p of ["200_silver/204_books/本A.md", "200_silver/204_books/本B.md", "200_silver/203_finance/2026-10.md", "200_silver/210_health/2026-10.md", "200_silver/200_market/株C.md"]) expect(orphans).not.toContain(p);
+    const goldSrcs = (db.query("SELECT DISTINCT src FROM links WHERE dst=?").all("200_silver/204_books/本B.md") as { src: string }[]).map((r) => r.src).sort();
+    expect(goldSrcs).toEqual(["300_gold/300_home.md", "300_gold/304_books/index.md"]);
+    expect(db.query("SELECT COUNT(*) c FROM notes WHERE path LIKE '300_gold/%'").get()).toEqual({ c: 0 });
+    expect(db.query("SELECT COUNT(*) c FROM notes_fts WHERE path LIKE '300_gold/%'").get()).toEqual({ c: 0 });
+    // a rebuilt Gold replaces its links instead of piling them up
+    buildGold(cfg, db);
+    indexNotes(cfg, db);
+    expect(db.query("SELECT COUNT(*) c FROM links WHERE src=? AND dst=?").get("300_gold/304_books/index.md", "200_silver/204_books/本B.md")).toEqual({ c: 1 });
+  });
+});
+
 describe("buildGold", () => {
   test("plaintext Gold lists encrypted domains by count only", () => {
     const root = fixtureRoot();
@@ -94,7 +158,7 @@ describe("buildGold", () => {
     buildGold(cfg, db);
     const home = readFileSync(join(cfg.gold, GOLD.home), "utf8");
     expect(home).toContain("[本A](../200_silver/204_books/本A.md)");
-    expect(home).toContain("暗号化ドメインの更新（2026-10-09 以降）: 203_finance 1 件、207_work 1 件");
+    expect(home).toContain("暗号化ドメインの更新（2026-10-09 以降）: 203_finance 1 件、207_work 1 件、210_health 1 件");
     expect(home).toContain("進行中 2（仕事 1）");
     expect(home).not.toContain("SECRET");
     expect(home).not.toContain("203_finance/");

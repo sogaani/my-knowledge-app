@@ -9,7 +9,7 @@ import { join } from "node:path";
 import type { Database } from "bun:sqlite";
 import { today, type KbConfig } from "./config";
 import { bronzeDir, markProcessed, readMeta, walkBronze } from "./bronze";
-import { createNote } from "./create";
+import { createNote, monthlyTitle } from "./create";
 import { parseNote, stringifyNote } from "./frontmatter";
 import { runQuery } from "./query";
 import type { SchemaRegistry } from "./schema";
@@ -111,7 +111,7 @@ export function importCalendar(cfg: KbConfig, reg: SchemaRegistry, db: Database,
     let rel = existing.get(month), created = false;
     if (!rel || !existsSync(join(cfg.root, rel))) {
       if (!events.length) continue;
-      rel = createNote(cfg, reg, db, { type: "calendar_log", title: month, set: { month } });
+      rel = createNote(cfg, reg, db, { type: "calendar_log", title: monthlyTitle("calendar_log", month), set: { month } });
       created = true;
     }
     const abs = join(cfg.root, rel);

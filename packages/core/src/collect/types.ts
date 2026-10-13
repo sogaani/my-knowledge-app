@@ -43,6 +43,8 @@ export interface CollectResult {
   meta?: Record<string, unknown>;
   /** Files written as-is (Gmail writes one mail-*.json per message). */
   files?: InboxFile[];
+  /** Items for the report / digest when it is not items.length or files.length (RSS: entries across its per-feed files). */
+  count?: number;
   /** New cursor; saved only when the whole run succeeded. */
   cursor?: string;
   /** Override the window recorded in the envelope / state (e.g. health only covers complete days). */

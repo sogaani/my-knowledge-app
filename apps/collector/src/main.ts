@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * Bronze collectors (Mac): pull GitHub / Gmail / Calendar / YouTube / Google Health / LinkedIn export into 000_inbox.
+ * Bronze collectors (Mac): pull GitHub / Gmail / Calendar / YouTube / Google Health / LinkedIn export / RSS feeds into 000_inbox.
  *   bun run collect [source...] [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--dry-run]
  *   bun run collect status
  *   bun run collect auth [google | google-health]   (no name: both, one after the other)

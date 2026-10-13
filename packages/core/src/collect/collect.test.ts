@@ -8,7 +8,7 @@ import { digestJson } from "./digest";
 import { bodyText, mailFileName, toMailItem } from "./sources/gmail";
 import { healthMetrics, type HealthDay } from "./sources/health";
 import { feedName, loadState, runCollectors } from "./run";
-import type { Collector } from "./types";
+import type { Collector, Feed } from "./types";
 import type { KbConfig } from "../config";
 
 const res = (status: number, headers: Record<string, string> = {}) => new Response(status === 200 ? "{}" : "err", { status, headers });
@@ -289,20 +289,61 @@ describe("sources against a fake API", () => {
           : [{ html_url: "", title: "Bug", number: 4, state: "open", created_at: "2026-10-07T00:00:00Z", closed_at: null, repository_url: "https://api.github.com/repos/me/app" }] };
       }
       if (url.includes("/search/commits")) return { items: [{ html_url: "", sha: "abcdef123", commit: { message: "feat: x\n\nbody", author: { date: "2026-10-08T00:00:00Z" } }, repository: { full_name: "me/app" } }] };
+      if (url.includes("/users/me/events")) return []; // events are covered below
       throw new Error(`unexpected ${url}`);
     });
     const r = await github.collect({ ...ctxBase, env: { GITHUB_TOKEN: "t", GITHUB_LOGIN: "me" }, http, from: new Date("2026-10-05T00:00:00Z"), to: new Date("2026-10-12T00:00:00Z") });
-    const q = calls.map((c) => new URL(c.url).searchParams.get("q"));
+    const q = calls.map((c) => new URL(c.url).searchParams.get("q")).filter(Boolean);
     expect(q).toEqual([
       "is:issue author:me created:2026-10-05T00:00:00Z..2026-10-12T00:00:00Z",
       "is:pull-request author:me created:2026-10-05T00:00:00Z..2026-10-12T00:00:00Z",
       "author:me committer-date:2026-10-05T00:00:00Z..2026-10-12T00:00:00Z",
     ]);
+    expect(calls.some((c) => c.url.startsWith("https://api.github.com/users/me/events?"))).toBe(true);
     expect(r.items!.map((i) => github.digest(i))).toEqual([
       "2026-10-07 issue me/app#4 [open] Bug",
       "2026-10-06 pr me/app#3 [closed] Fix",
       "2026-10-08 commit me/app abcdef1 feat: x",
     ]);
+    expect(r.cursor).toBeUndefined(); // no events seen → the cursor is left alone
+  });
+
+  test("github events: push / review / star, searched commits dropped from pushes, cursor = newest event id", async () => {
+    const { github, eventItems, isNewEvent } = require("./sources/github") as typeof import("./sources/github");
+    const push = (id: string, created_at: string, ref: string, commits: [string, string][]) => ({ id, type: "PushEvent", created_at, repo: { name: "me/app" }, payload: { ref, head: commits.at(-1)?.[0] ?? "", before: "0", commits: commits.map(([sha, message]) => ({ sha, message, author: { name: "me" } })) } });
+    const events = [ // newest first, as the API lists them
+      { id: "9000000000004", type: "WatchEvent", created_at: "2026-10-10T03:00:00Z", repo: { name: "someone/lib" }, payload: { action: "started" } },
+      { id: "9000000000003", type: "PullRequestReviewEvent", created_at: "2026-10-09T02:00:00Z", repo: { name: "team/svc" }, payload: { action: "created", review: { state: "approved", html_url: "", submitted_at: "2026-10-09T02:00:00Z", body: null }, pull_request: { number: 12, title: "Add retries", html_url: "" } } },
+      push("9000000000002", "2026-10-08T01:00:00Z", "refs/heads/main", [["abcdef123", "feat: x"]]), // found by the commit search too
+      push("9000000000001", "2026-10-07T01:00:00Z", "refs/heads/feat/branch", [["111111111", "wip: a"], ["222222222", "wip: b\n\nbody"], ["333333333", "wip: c"], ["444444444", "wip: d"]]),
+      { id: "9000000000000", type: "IssueCommentEvent", created_at: "2026-10-06T00:00:00Z", repo: { name: "me/app" }, payload: {} }, // not collected
+      push("8999999999999", "2026-10-01T00:00:00Z", "refs/heads/main", [["999999999", "old"]]), // before the window
+    ];
+    const { http, calls } = fakeHttp(({ url }) => {
+      if (url.includes("/search/commits")) return { items: [{ html_url: "", sha: "abcdef123", commit: { message: "feat: x", author: { date: "2026-10-08T00:00:00Z" } }, repository: { full_name: "me/app" } }] };
+      if (url.includes("/search/")) return { items: [] };
+      if (url.includes("/users/me/events")) return new URL(url).searchParams.get("page") === "1" ? events : [];
+      throw new Error(`unexpected ${url}`);
+    });
+    const ctx = { ...ctxBase, env: { GITHUB_TOKEN: "t", GITHUB_LOGIN: "me" }, http, from: new Date("2026-10-05T00:00:00Z"), to: new Date("2026-10-12T00:00:00Z") };
+    const r = await github.collect(ctx);
+    expect(r.items!.map((i) => github.digest(i))).toEqual([
+      "2026-10-08 commit me/app abcdef1 feat: x",
+      "2026-10-07 push me/app feat/branch (4 commits) 1111111 wip: a; 2222222 wip: b; 3333333 wip: c; …",
+      "2026-10-09 review team/svc#12 [approved] Add retries",
+      "2026-10-10 star someone/lib https://github.com/someone/lib",
+    ]);
+    expect(r.cursor).toBe("9000000000004");
+    expect(r.meta).toMatchObject({ login: "me", events: 5 });
+    expect(calls.filter((c) => c.url.includes("/events")).length).toBe(1); // the page had a stale event → no second page
+
+    // next run: only events past the cursor, regardless of the window
+    const r2 = await github.collect({ ...ctx, cursor: "9000000000003", from: new Date("2026-10-01T00:00:00Z") });
+    expect(r2.items!.map((i) => github.digest(i))).toEqual(["2026-10-08 commit me/app abcdef1 feat: x", "2026-10-10 star someone/lib https://github.com/someone/lib"]);
+    expect(r2.cursor).toBe("9000000000004");
+    expect(isNewEvent(events[0]!, "999", new Date(0))).toBe(true); // numeric compare, not string compare
+    // a sha pushed twice (force push) is one item
+    expect(eventItems([push("2", "2026-10-08T00:00:00Z", "refs/heads/x", [["aaa", "m"]]), push("1", "2026-10-07T00:00:00Z", "refs/heads/x", [["aaa", "m"]])], new Set()).length).toBe(1);
   });
 
   test("health: complete days only, ≤14-day rollup chunks, sleep on the wake-up day, empty days dropped", async () => {
@@ -460,5 +501,115 @@ describe("google token lifetime", () => {
     const http = createHttp({ fetchImpl: (async () => new Response('{"error":"invalid_grant","error_description":"Token has been expired or revoked."}', { status: 400 })) as unknown as typeof fetch, sleep: async () => {} });
     const auth = createGoogleAuth({ GOOGLE_CLIENT_ID: "c", GOOGLE_CLIENT_SECRET: "s", GOOGLE_HEALTH_REFRESH_TOKEN: "r" }, http, { refreshTokenVar: "GOOGLE_HEALTH_REFRESH_TOKEN", authCommand: "auth google-health" });
     await expect(auth.accessToken()).rejects.toThrow("GOOGLE_HEALTH_REFRESH_TOKEN expired or revoked (invalid_grant): run bun run collect auth google-health");
+  });
+});
+
+describe("rss", () => {
+  const { parseFeed, feedSlug, feedTargets, newEntries, rss } = require("./sources/rss") as typeof import("./sources/rss");
+  const rssXml = `<?xml version="1.0"?>
+<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:dc="http://purl.org/dc/elements/1.1/">
+<channel><title>Example Tech Blog</title><link>https://blog.example.test/</link><description>d</description>
+<item><title>Hello &amp; welcome</title><link>https://blog.example.test/posts/1</link><guid isPermaLink="false">post-1</guid>
+  <pubDate>Thu, 08 Oct 2026 10:00:00 +0900</pubDate><dc:creator>alice</dc:creator>
+  <description><![CDATA[<p>First <b>paragraph</b> of the post.</p><p>Second one.</p>]]></description></item>
+<item><title><![CDATA[Older]]></title><link>https://blog.example.test/posts/0</link><pubDate>Mon, 01 Sep 2026 10:00:00 GMT</pubDate><description>old&#x2019;s text</description></item>
+</channel></rss>`;
+  const atomXml = `<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title type="text">Example Atom</title><link rel="self" href="https://atom.example.test/feed.xml"/><link rel="alternate" href="https://atom.example.test/"/>
+  <entry><title type="html">Entry &lt;b&gt;one&lt;/b&gt; &amp;amp; more</title><link rel="alternate" type="text/html" href="https://atom.example.test/e/1"/><id>tag:atom.example.test,2026:1</id>
+    <published>2026-10-09T01:00:00Z</published><updated>2026-10-09T02:00:00Z</updated><author><name>bob</name></author>
+    <summary type="html">&lt;p&gt;Short &amp;amp; sweet&lt;/p&gt;</summary></entry>
+  <entry><title>Entry two</title><link href="https://atom.example.test/e/2"/><id>tag:atom.example.test,2026:2</id><updated>2026-10-10T00:00:00Z</updated>
+    <content type="html"><![CDATA[<div>${"long ".repeat(100)}</div>]]></content></entry>
+</feed>`;
+
+  test("RSS 2.0: guid, pubDate, CDATA / entities, tags stripped, summary clipped", () => {
+    const f = parseFeed(rssXml);
+    expect(f.kind).toBe("rss");
+    expect(f.title).toBe("Example Tech Blog");
+    expect(f.entries).toEqual([
+      { id: "post-1", title: "Hello & welcome", url: "https://blog.example.test/posts/1", date: "2026-10-08T01:00:00.000Z", summary: "First paragraph of the post. Second one.", author: "alice" },
+      { id: "https://blog.example.test/posts/0", title: "Older", url: "https://blog.example.test/posts/0", date: "2026-09-01T10:00:00.000Z", summary: "old’s text" },
+    ]);
+  });
+
+  test("Atom: alternate link, id, published over updated, html summary unescaped and stripped", () => {
+    const f = parseFeed(atomXml);
+    expect(f.kind).toBe("atom");
+    expect(f.title).toBe("Example Atom");
+    expect(f.link).toBe("https://atom.example.test/");
+    expect(f.entries[0]).toEqual({ id: "tag:atom.example.test,2026:1", title: "Entry one & more", url: "https://atom.example.test/e/1", date: "2026-10-09T01:00:00.000Z", summary: "Short & sweet", author: "bob" });
+    expect(f.entries[1]).toMatchObject({ id: "tag:atom.example.test,2026:2", url: "https://atom.example.test/e/2", date: "2026-10-10T00:00:00.000Z" });
+    expect(f.entries[1]!.summary.length).toBe(300);
+    expect(() => parseFeed("<html><body>nope</body></html>")).toThrow("not an RSS or Atom feed");
+  });
+
+  test("slugs come from host + path without feed suffixes; clashes get a suffix; FEED_URLS splits on commas and newlines", () => {
+    expect(feedSlug("https://www.blog.example.test/feed.xml")).toBe("blog-example-test");
+    expect(feedSlug("https://news.example.test/tech/rss")).toBe("news-example-test-tech");
+    expect(feedSlug("https://example.test/index.xml")).toBe("example-test");
+    expect(feedSlug("https://example.test/feeds/posts/default?alt=rss")).toBe("example-test-feeds-posts");
+    expect(feedTargets({ FEED_URLS: "https://a.test/feed,\n https://b.test/rss.xml ,https://a.test/feed/" })).toEqual([
+      { url: "https://a.test/feed", slug: "a-test" }, { url: "https://b.test/rss.xml", slug: "b-test" }, { url: "https://a.test/feed/", slug: "a-test-2" },
+    ]);
+    expect(rss.configured({})).toBe("missing FEED_URLS");
+    expect(rss.configured({ FEED_URLS: "https://a.test/feed" })).toBe(true);
+  });
+
+  test("first run takes the window (or the newest undated entries); later runs take unseen ids", () => {
+    const f = parseFeed(rssXml);
+    expect(newEntries(f, undefined, new Date("2026-10-05T00:00:00Z")).map((e) => e.id)).toEqual(["post-1"]);
+    expect(newEntries(f, ["post-1"], new Date(0)).map((e) => e.id)).toEqual(["https://blog.example.test/posts/0"]);
+    const undated = { ...f, entries: f.entries.map((e) => ({ ...e, date: null })) };
+    expect(newEntries(undated, undefined, new Date("2026-10-05T00:00:00Z")).length).toBe(2);
+  });
+
+  test("collect: one file per feed with news, per-feed cursor, a broken feed is skipped but keeps its ids", async () => {
+    const log = { info() {}, warn: (m: string) => warns.push(m) };
+    const warns: string[] = [];
+    let atomDown = false;
+    const http = {
+      async fetch(url: string): Promise<Response> {
+        if (url.startsWith("https://blog.example.test/")) return new Response(rssXml);
+        if (url.startsWith("https://atom.example.test/")) { if (atomDown) throw new Error("HTTP 503 https://atom.example.test/feed.xml?…"); return new Response(atomXml); }
+        throw new Error(`unexpected ${url}`);
+      },
+      async json<T>(): Promise<T> { throw new Error("unused"); },
+    };
+    const env = { FEED_URLS: "https://blog.example.test/feed, https://atom.example.test/feed.xml" };
+    const base = { cfg: {} as KbConfig, env, http, google: { configured: "unused", accessToken: async () => "" }, log, dryRun: false, from: new Date(2026, 9, 5), to: new Date(2026, 9, 12, 6, 30) };
+    const r1 = await rss.collect({ ...base, cursor: undefined });
+    expect(r1.files!.map((f) => f.name)).toEqual(["collect-rss-blog-example-test-2026-10-05_2026-10-12.json", "collect-rss-atom-example-test-2026-10-05_2026-10-12.json"]);
+    expect(r1.count).toBe(3);
+    const feed = r1.files![0]!.json as Feed;
+    expect(feed).toMatchObject({ source: "rss", from: "2026-10-05", to: "2026-10-12", count: 1, meta: { feed: "https://blog.example.test/feed", title: "Example Tech Blog", slug: "blog-example-test", kind: "rss" } });
+    const cur = JSON.parse(r1.cursor!);
+    expect(cur.feeds["https://blog.example.test/feed"]).toEqual(["post-1", "https://blog.example.test/posts/0"]); // every id seen, not just the new ones
+    expect(cur.feeds["https://atom.example.test/feed.xml"].length).toBe(2);
+    // the digest the ingest agent reads
+    expect(digestJson(JSON.stringify(feed))).toContain("- 2026-10-08 Hello & welcome https://blog.example.test/posts/1 — First paragraph of the post. Second one.");
+
+    // nothing new → no file, cursor unchanged; the Atom feed down → warned, its ids kept
+    atomDown = true;
+    const r2 = await rss.collect({ ...base, cursor: r1.cursor });
+    expect(r2.files).toEqual([]);
+    expect(r2.count).toBe(0);
+    expect(JSON.parse(r2.cursor!)).toEqual(cur);
+    expect(warns.length).toBe(1);
+    expect(warns[0]).toContain("rss atom-example-test: HTTP 503");
+
+    // all feeds down → the run fails (the orchestrator keeps the old cursor and retries)
+    const dead = { ...http, async fetch(): Promise<Response> { throw new Error("HTTP 500"); } };
+    await expect(rss.collect({ ...base, http: dead, cursor: r1.cursor })).rejects.toThrow("every feed failed");
+
+    // through runCollectors: one inbox file per feed, state carries the cursor and the entry count
+    const cfg = (() => { const root = mkdtempSync(join(tmpdir(), "kb-rss-")); return { root, inbox: join(root, "000_inbox"), cache: join(root, "900_system", "cache") } as unknown as KbConfig; })();
+    atomDown = false;
+    const rep = await runCollectors(cfg, env, { now: new Date(2026, 9, 12, 6, 30), collectors: [rss], log, http });
+    expect(rep[0]).toMatchObject({ id: "rss", status: "ok", items: 3 });
+    expect(readdirSync(cfg.inbox).sort()).toEqual(["collect-rss-atom-example-test-2026-10-05_2026-10-12.json", "collect-rss-blog-example-test-2026-10-05_2026-10-12.json"]);
+    expect(loadState(cfg).rss).toMatchObject({ lastItems: 3 });
+    expect(JSON.parse(loadState(cfg).rss!.cursor!).v).toBe(1);
   });
 });

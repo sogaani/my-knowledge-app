@@ -85,7 +85,7 @@ export async function runCollectors(cfg: KbConfig, env: Env, opts: RunOpts = {})
     try {
       res = await c.collect({ cfg, env, from, to, cursor: st.cursor, http, google, log, dryRun: !!opts.dryRun });
       const f = ymd(res.from ?? from), t = ymd(res.to ?? to);
-      Object.assign(report, { from: f, to: t, items: res.items?.length ?? res.files?.length ?? 0 });
+      Object.assign(report, { from: f, to: t, items: res.count ?? res.items?.length ?? res.files?.length ?? 0 });
       const files = [...(res.files ?? [])];
       if (res.items?.length) {
         const feed: Feed = { source: c.id, from: f, to: t, collected_at: now.toISOString(), count: res.items.length, ...(res.meta ? { meta: res.meta } : {}), items: res.items };

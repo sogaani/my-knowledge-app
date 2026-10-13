@@ -7,5 +7,6 @@ import { calendar } from "./sources/calendar";
 import { youtube } from "./sources/youtube";
 import { health } from "./sources/health";
 import { linkedin } from "./sources/linkedin";
+import { rss } from "./sources/rss";
 
-export const COLLECTORS: Collector[] = [gmail, gmailReview, github, calendar, youtube, health, linkedin];
+export const COLLECTORS: Collector[] = [gmail, gmailReview, github, calendar, youtube, health, linkedin, rss];

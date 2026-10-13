@@ -7,10 +7,10 @@ launchd daily-collect（毎朝 06:30）
   └─ bun run collect                     apps/collector（.env に秘密。Mac だけ）
        └─ runCollectors()                packages/core/src/collect/run.ts
             ├─ Promise.allSettled で各 Collector を並行実行（1 つ失敗しても他は続ける）
-            │    gmail / gmail-review / github / calendar / youtube / health / linkedin
+            │    gmail / gmail-review / github / calendar / youtube / health / linkedin / rss
             ├─ HTTP は http.ts（429・5xx・レート制限の 403（GitHub の X-RateLimit、Google の rateLimitExceeded / RATE_LIMIT_EXCEEDED）だけ再試行。Retry-After / X-RateLimit-Reset を尊重、
             │   それ以外は指数バックオフ + full jitter：基準 1 秒・上限 60 秒・最大 5 回）
-            ├─ 000_inbox/collect-<source>-<from>_<to>.json（フィード）/ mail-YYYYMMDD-<category>-<id>.json（Gmail）
+            ├─ 000_inbox/collect-<source>-<from>_<to>.json（フィード）/ collect-rss-<slug>-<from>_<to>.json（RSS はフィードごと）/ mail-YYYYMMDD-<category>-<id>.json（Gmail）
             └─ 900_system/cache/collect-state.json（ソースごとのカーソル。失敗したソースは前回の位置から再取得）
 launchd daily-ingest（07:00）→ enqueue.sh → POST /api/jobs（ingest, scheduled）→ worker
   ├─ worker は claim した ingest と一緒に、その時点で queued の ingest を全部 claim して 1 束にする（下の「ingest ジョブの束ね実行」）
@@ -40,11 +40,12 @@ ingest は「WebUI の投げ込み 1 件 = 1 ジョブ」で、同じ時間帯�
 |---|---|---|---|
 | `gmail` | Apps Script が `KB/*` ラベルを付け、まだ `KB/取込済` が無いメール。取得後に `KB/取込済` を付ける | Google OAuth（`gmail.modify`） | ラベル基準 |
 | `gmail-review` | Apps Script が決めきれず `システム/要確認` を付けたメールの週次ダイジェスト（日付・差出人・件名だけ。本文は取らず、ラベルも変えない）。前回から 7 日経った朝だけ `collect-gmail-review-<from>_<to>.json` を書き、それまでは窓を開けたまま何も書かない。KB に入れるものは Gmail で `KB/*` を手で付ける（次の `gmail` で取得される）。`GMAIL_REVIEW=off`（`GMAIL=off` でも止まる） | Google OAuth（`gmail` と同じトークン） | 前回のダイジェスト〜今（7 日以上） |
-| `github` | 自分が作った Issue / PR、自分のコミット（検索 API） | fine-grained PAT（読み取り専用） | 前回の終わり〜今 |
+| `github` | ①検索 API: 自分が作った Issue / PR、自分のコミット（コミット検索はデフォルトブランチしか索引されない）②`/users/:login/events`: push（全ブランチ。検索で出たコミットは push から除く。push の commits が空になれば捨てる）・PR レビュー（`PullRequestReviewEvent`）・star（`WatchEvent`）。events は新しい順・最大 300 件・直近 30 日程度なので、カーソルは最後に見た event id（初回は窓の中の event）。PAT に `Events`（ユーザー権限、Read）が無いと公開イベントだけになる | fine-grained PAT（読み取り専用） | ①前回の終わり〜今 ②event id |
 | `calendar` | 表示中のカレンダー（または `GOOGLE_CALENDAR_IDS`）の予定。キャンセル・辞退は除く。①実績: 前回の終わり〜今に行われた予定 ②将来: 今〜2 年後（`GOOGLE_CALENDAR_HORIZON_DAYS` で変更可）を毎回取得し、前回から新規・変更・削除になった予定だけを出す（繰り返しはシリーズで 1 件） | Google OAuth | ①前回の終わり〜今 ②今〜2 年後の差分 |
 | `youtube` | 高評価した動画（前回からの差分）と `YOUTUBE_PLAYLIST_IDS` の再生リスト | Google OAuth | 差分（カーソルに既知 ID） |
 | `health` | Google Health API v4 の日別 歩数・距離・消費カロリー・アクティブ時間（`dailyRollUp`）と睡眠（起床日で集計） | Google OAuth（`googlehealth.*.readonly` だけの別トークン。Health API は他のスコープを含むトークンを 403 で拒否する） | 完了した日だけ（昨日まで） |
 | `linkedin` | inbox に置かれた `*LinkedInDataExport*.zip` のプロフィール・職歴・新しいつながり・新しいメッセージ | なし（ZIP を手で置く） | 前回のエクスポートとの差分 |
+| `rss` | `FEED_URLS`（カンマ・空白・改行区切り）の RSS 2.0 / RSS 1.0 / Atom フィード。新着のあるフィードごとに `collect-rss-<slug>-<from>_<to>.json`（slug は URL のホスト + パス。`meta` にフィードの URL と題名）。項目は題名・URL・日付・要約の先頭 300 字だけで本文は取らない（読む価値のあるものは ingest が `kb ingest <url>` で web として取り込む）。パースは Bun 標準の正規表現で素朴に行う（CDATA・実体参照・Atom の `type="html"` は扱う。複雑な XML は想定しない）。1 つのフィードが落ちても他は続け（`WARN` をログに出す）、全部落ちたときだけ失敗 | なし | 差分（カーソルにフィードごとの既知 entry id。初回は窓の中の entry、日付の無いフィードは新しい 50 件） |
 
 LinkedIn は自分のつながりやメッセージを返す API が EU/EEA 以外に公開されていないため、設定の「データのコピーをダウンロード」を使う。プロフィールの住所・生年月日などはフィードに写さない（ZIP 自体は Bronze に残る）。
 
@@ -61,12 +62,13 @@ Gmail は最多のソース（3 日で 185 件、うち purchase と finance が
 ## 初回設定
 
 1. `cp apps/collector/.env.example apps/collector/.env` して `KB_ROOT` を書く。
-2. GitHub: fine-grained PAT（対象リポジトリに Metadata / Contents / Issues / Pull requests の Read）を `GITHUB_TOKEN` に。
+2. GitHub: fine-grained PAT（対象リポジトリに Metadata / Contents / Issues / Pull requests の Read。非公開の push・レビュー・star も拾うならユーザー権限 Events の Read も）を `GITHUB_TOKEN` に。
 3. Google: GCP で Gmail API・Google Calendar API・YouTube Data API v3・Google Health API を有効化し、OAuth クライアント（種類「デスクトップ アプリ」）を作って `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` に。同意画面は「テスト」のまま運用している（下の「トークンの更新」）。
-4. `bun run collect auth`：ブラウザで 2 回同意する（Gmail・Calendar・YouTube 用と、Health のスコープだけの Health 用）。`GOOGLE_REFRESH_TOKEN` / `GOOGLE_HEALTH_REFRESH_TOKEN` と発行日時が `.env` に書き込まれる（トークンは画面に出ない）。
-5. `bun run collect status` で各ソースが `configured` になったか確認し、`bun run collect --dry-run` で件数だけ見る。
-6. データリポジトリの `900_system/scripts/launchd.sh` を再実行して `daily-collect` を入れる。
-7. Gmail を切り替える：`900_system/gas/emailfilter/README.md` の「pushToInbox からの切り替え」。
+4. RSS: 追いたいブログ・ニュースのフィード URL を `FEED_URLS` に並べる（無ければ `rss` は skip）。
+5. `bun run collect auth`：ブラウザで 2 回同意する（Gmail・Calendar・YouTube 用と、Health のスコープだけの Health 用）。`GOOGLE_REFRESH_TOKEN` / `GOOGLE_HEALTH_REFRESH_TOKEN` と発行日時が `.env` に書き込まれる（トークンは画面に出ない）。
+6. `bun run collect status` で各ソースが `configured` になったか確認し、`bun run collect --dry-run` で件数だけ見る。
+7. データリポジトリの `900_system/scripts/launchd.sh` を再実行して `daily-collect` を入れる。
+8. Gmail を切り替える：`900_system/gas/emailfilter/README.md` の「pushToInbox からの切り替え」。
 
 秘密は `.env`（gitignore 済み）と 1Password に置く。ログには件数とエラーの種類だけを出す（件名・本文は出さない）。
 
@@ -108,7 +110,7 @@ API に VAPID 鍵があるとき（`VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY`）�
 
 ## ソースを足す
 
-1. `packages/core/src/collect/sources/<id>.ts` に `Collector` を実装する（`configured()`・`collect()`・`digest()`）。HTTP は `ctx.http`（リトライ込み）、Google API は `googleJson(ctx.http, ctx.google, url)`。
+1. `packages/core/src/collect/sources/<id>.ts` に `Collector` を実装する（`configured()`・`collect()`・`digest()`）。HTTP は `ctx.http`（リトライ込み）、Google API は `googleJson(ctx.http, ctx.google, url)`。標準の 1 ファイル（`items`）に収まらないときは `files` で自分で名前を付け（`collect-<id>-…`）、件数を `count` に入れる（運用ダイジェストの数）。
 2. `registry.ts` の `COLLECTORS` に足す。
 3. 新しい秘密は `apps/collector/.env.example` に、Google のスコープは `google.ts` の `GOOGLE_SCOPES` に足す（足したら `auth google` をやり直す）。
 4. データリポジトリの `ingest` スキルの分類表に `collect-<id>-*` の行を足す。

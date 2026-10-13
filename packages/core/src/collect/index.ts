@@ -10,3 +10,4 @@ export { healthMetrics, type HealthDay, type HealthMetrics } from "./sources/hea
 export { GMAIL_LABELS, FETCHED_LABEL } from "./sources/gmail";
 export { REVIEW_LABEL, REVIEW_PERIOD_DAYS, reviewDue, type ReviewItem } from "./sources/gmail-review";
 export { LINKEDIN_ZIP } from "./sources/linkedin";
+export { parseFeed, feedSlug, feedTargets, type RssEntry } from "./sources/rss";

@@ -31,13 +31,11 @@ access:
   sessionDuration: 24h
   # CloudflareServiceToken for the Mac worker; the operator writes Secret <name> (cloudflareClientId / cloudflareSecretKey).
   serviceTokenName: kb-worker
-  # CloudflareServiceToken for external pushers (Google Apps Script → POST /api/inbox only). Secret <name>, same keys.
-  ingestServiceTokenName: kb-ingest
   # Keep the Cloudflare objects if the CRs are deleted (an Argo prune must not unprotect the app or rotate the token).
   preventDestroy: true
 # Created out of band (see deploy/README.md). The chart only references them.
 secrets:
-  api: kb-api # WORKER_TOKEN, INGEST_TOKEN, CF_ACCESS_AUD, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY (Web Push; optional, see README §1)
+  api: kb-api # WORKER_TOKEN, CF_ACCESS_AUD, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY (Web Push; optional, see README §1)
   git: kb-git # deploy_key
   gitCrypt: kb-git-crypt # key
 config:

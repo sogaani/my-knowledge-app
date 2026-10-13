@@ -7,7 +7,7 @@ import {
   keywordSearch, monthlyByCurrency, errorHead, similarNotes, neighborNotes, noteHeads, resurface, LAYOUT, SILVER_PREFIX, GOLD_PREFIX, type SearchResponse, type SearchMode, type Reaction,
 } from "@kb/core";
 import { env } from "./env";
-import { authenticate, requireUser, requireWorker, requireInboxWriter, requireUserOrWorker, type Principal } from "./auth";
+import { authenticate, requireUser, requireWorker, requireUserOrWorker, type Principal } from "./auth";
 import { cfg, reg, db, sync, head, rebuildGold, commitKb, cachedLint, pushState, unsavedCount, isGitRepo } from "./kb";
 import {
   createJob, getJob, listJobs, claimNextJob, claimQueuedJobs, appendJobLog, touchJob, finishJob, requeueStale, pruneSearchJobs, waitJobEvent,
@@ -242,12 +242,12 @@ api.post("/suggestions/react", requireUser, async (c) => {
   return c.json({ ok: true, created: r.created, existing: r.existing ?? null, commit });
 });
 
-/** Uploaded filenames come from outside (web UI, Apps Script): keep the basename, drop path/control chars. */
+/** Uploaded filenames come from outside (web UI): keep the basename, drop path/control chars. */
 const safeName = (n: string, id: string) => {
   const b = basename(n).replace(/[\\/:*?"<>|\x00-\x1f]/g, "_").replace(/^\.+/, "").slice(0, 150);
   return b || `file-${id.slice(0, 8)}`;
 };
-api.post("/inbox", requireInboxWriter, async (c) => {
+api.post("/inbox", requireUser, async (c) => {
   const ct = c.req.header("content-type") ?? "";
   const jobId = newId();
   const items: { id: string; kind: "url" | "text" | "file"; name: string }[] = [];
@@ -279,9 +279,8 @@ api.post("/inbox", requireInboxWriter, async (c) => {
     if (b.url) { const id = newId(); addInboxItem({ id, job_id: jobId, kind: "url", name: b.url, path: null, url: b.url, text: null }); items.push({ id, kind: "url", name: b.url }); }
     if (b.text) { const id = newId(); const name = `${(b.title ?? "memo").replace(/[\\/:*?"<>|]/g, "")}-${id.slice(0, 6)}.md`; addInboxItem({ id, job_id: jobId, kind: "text", name, path: null, url: null, text: b.text }); items.push({ id, kind: "text", name }); }
   }
-  const who = c.get("principal");
-  console.log(`inbox: ${who.kind}/${who.kind === "user" ? who.email : who.name} staged ${items.length} skipped ${skipped.length}`);
-  // Everything already staged earlier: still 200 so an idempotent pusher can mark its side as done.
+  console.log(`inbox: staged ${items.length} skipped ${skipped.length}`);
+  // Everything already staged earlier: still 200 (nothing new to ingest, nothing lost).
   if (!items.length) return skipped.length ? c.json({ job: null, items, skipped }) : c.json({ error: "nothing to ingest" }, 400);
   const job = createJob("ingest", { items }, jobId);
   return c.json({ job, items, skipped });

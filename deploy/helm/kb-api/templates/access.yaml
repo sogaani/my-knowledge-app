@@ -12,16 +12,6 @@ spec:
   name: {{ $a.serviceTokenName }}
 ---
 apiVersion: cloudflare.zelic.io/v1alpha1
-kind: CloudflareServiceToken
-metadata:
-  name: {{ $a.ingestServiceTokenName }}
-  labels: {{- include "kb-api.labels" . | nindent 4 }}
-  annotations:
-    cloudflare.zelic.io/prevent-destroy: {{ $a.preventDestroy | quote }}
-spec:
-  name: {{ $a.ingestServiceTokenName }}
----
-apiVersion: cloudflare.zelic.io/v1alpha1
 kind: CloudflareAccessApplication
 metadata:
   name: kb-api
@@ -49,10 +39,4 @@ spec:
       include:
         - serviceToken:
             - valueFrom: { name: {{ $a.serviceTokenName }}, namespace: {{ .Release.Namespace }} }
-    # Gmail Apps Script pusher: service token only; the API limits this principal to POST /api/inbox.
-    - name: ingest
-      decision: non_identity
-      include:
-        - serviceToken:
-            - valueFrom: { name: {{ $a.ingestServiceTokenName }}, namespace: {{ .Release.Namespace }} }
 {{- end }}

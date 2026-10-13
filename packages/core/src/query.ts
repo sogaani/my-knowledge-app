@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { SILVER_PREFIX } from "./config";
 import type { NoteRow } from "./db";
 
 export interface QueryOpts {
@@ -91,6 +92,33 @@ export function runQuery(db: Database, q: QueryOpts): QueryResult[] {
     path: r.path, type: r.type, title: r.title, status: r.status, summary: r.summary,
     tags: JSON.parse(r.tags || "[]"), fm: JSON.parse(r.fm), archived: !!r.archived, updated: r.updated, score: r.score, matched: r.matched,
   }));
+}
+
+export interface NoteHead { path: string; type: string; title: string; status: string; summary: string }
+const HEAD_COLS = "path, type, title, status, summary";
+/** Title and the other header fields of the given notes (any that are still indexed), keyed by path. */
+export function noteHeads(db: Database, paths: string[]): Map<string, NoteHead> {
+  const out = new Map<string, NoteHead>();
+  const uniq = [...new Set(paths)];
+  for (let i = 0; i < uniq.length; i += 500) {
+    const slice = uniq.slice(i, i + 500);
+    for (const r of db.query(`SELECT ${HEAD_COLS} FROM notes WHERE path IN (${slice.map(() => "?").join(",")})`).all(...slice) as NoteHead[]) out.set(r.path, r);
+  }
+  return out;
+}
+
+/**
+ * The notes just before and after `path` among Silver notes of the same type, in the list order the UI uses
+ * (`updated` DESC, then path). An archived note is placed among the archived + live list; a live one among live notes only.
+ */
+export function neighborNotes(db: Database, path: string): { prev: NoteHead | null; next: NoteHead | null } {
+  const cur = db.query("SELECT type, updated, archived FROM notes WHERE path = ?").get(path) as { type: string; updated: string; archived: number } | null;
+  if (!cur) return { prev: null, next: null };
+  const scope = `type = ? AND path LIKE ? ${cur.archived ? "" : "AND archived = 0 "}AND path != ?`;
+  const args = [cur.type, `${SILVER_PREFIX}%`, path, cur.updated, cur.updated, path];
+  const prev = db.query(`SELECT ${HEAD_COLS} FROM notes WHERE ${scope} AND (updated > ? OR (updated = ? AND path < ?)) ORDER BY updated ASC, path DESC LIMIT 1`).get(...args) as NoteHead | null;
+  const next = db.query(`SELECT ${HEAD_COLS} FROM notes WHERE ${scope} AND (updated < ? OR (updated = ? AND path > ?)) ORDER BY updated DESC, path ASC LIMIT 1`).get(...args) as NoteHead | null;
+  return { prev, next };
 }
 
 function sqlOp(op: Filter["op"]): string {

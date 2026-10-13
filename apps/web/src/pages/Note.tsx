@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { PencilIcon } from "lucide-react";
+import { ChevronLeftIcon, ChevronRightIcon, PencilIcon } from "lucide-react";
 import { api, type NoteDetail, type TypeDef } from "@/api";
 import Md, { routeFor } from "@/components/Md";
 import { Chip, Choice, Err, Loading, Toolbar, Viewed } from "@/components/common";
@@ -59,6 +59,12 @@ export default function Note() {
   return (
     <>
       <p className="flex flex-wrap items-center gap-1 text-sm text-muted-foreground"><Link to={`/notes/${n.type}`}>{typeLabel(n.type)}</Link> / {path}{n.archived && <Chip>archive</Chip>}</p>
+      {(n.prev || n.next) && (
+        <nav className="mt-1 flex items-center gap-3 text-sm" aria-label={`${typeLabel(n.type)} の前後のノート`}>
+          {n.prev && <Link to={routeFor(n.prev.path)} className="inline-flex min-w-0 items-center gap-0.5 text-muted-foreground" title={n.prev.summary}><ChevronLeftIcon className="size-4 shrink-0" /><span className="truncate">{n.prev.title}</span></Link>}
+          {n.next && <Link to={routeFor(n.next.path)} className="ml-auto inline-flex min-w-0 items-center gap-0.5 text-muted-foreground" title={n.next.summary}><span className="truncate">{n.next.title}</span><ChevronRightIcon className="size-4 shrink-0" /></Link>}
+        </nav>
+      )}
       <h2 className="mt-1 mb-2 text-2xl font-semibold tracking-tight">{n.title}</h2>
       <Err e={err} />
       {edit ? (

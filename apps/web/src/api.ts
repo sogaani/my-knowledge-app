@@ -1,6 +1,8 @@
 /** `viewed`: when the note page was last shown (API `views` table), null = never. */
 export interface NoteSummary { path: string; type: string; title: string; status: string; summary: string; tags: string[]; fm: Record<string, unknown>; archived: boolean; updated: string; viewed?: string | null }
 export interface SimilarNote { path: string; type: string; title: string; status: string; summary: string; score: number }
+/** Header fields of a note (title etc.), as the API resolves them for chat sources and prev/next links. */
+export interface NoteHead { path: string; type: string; title: string; status: string; summary: string }
 /** `attachment`: set when a log.md / tasks.md path was asked for; the payload is then its folder entity's README note. */
 export interface NoteDetail {
   path: string; type: string; title: string; fm: Record<string, unknown>; body: string; archived: boolean; links: string[]; backlinks: string[]; attachments: Record<string, string>; attachment?: string;
@@ -8,12 +10,15 @@ export interface NoteDetail {
   similar: SimilarNote[];
   /** The view before this one, and how many times the page was shown before. */
   viewed?: string | null; views?: number;
+  /** Neighbours in the type's list (the order of /notes/:type): null at either end. */
+  prev: NoteHead | null; next: NoteHead | null;
 }
 /** What to look at again today (Gold 393): due for review, written on this day in an earlier year, three random picks. */
 export interface ResurfaceEntry { path: string; type: string; title: string; status: string; summary: string; encrypted: boolean; reason: string; date: string; overdue?: boolean; viewed?: string | null }
 export interface Resurface { date: string; due: ResurfaceEntry[]; onThisDay: ResurfaceEntry[]; random: ResurfaceEntry[] }
 export interface Job { id: string; kind: string; status: "queued" | "running" | "done" | "failed"; payload: string; result: string | null; log: string; commit: string | null; created_at: string; started_at: string | null; finished_at: string | null }
-export interface ChatMessage { id: string; role: "user" | "assistant"; text: string; sources: string; job_id: string | null; created_at: string }
+/** `sources`: JSON array of note paths (the ask skill's 根拠); `sourceNotes`: the same resolved to titles by the API. */
+export interface ChatMessage { id: string; role: "user" | "assistant"; text: string; sources: string; sourceNotes?: NoteHead[]; job_id: string | null; created_at: string }
 export interface SearchMatch { path: string; heading: string; snippet: string; spoiler: boolean; via: ("vector" | "keyword")[]; vectorDistance?: number; bm25?: number }
 export interface SearchHit { path: string; type: string; title: string; status: string; summary: string; tags: string[]; updated: string; archived: boolean; score: number; confidence: "high" | "low"; matches: SearchMatch[] }
 export interface SearchResponse { hits: SearchHit[]; mode: "hybrid" | "vector" | "keyword"; degraded?: string; job?: string; queuedMs?: number | null; workerMs?: number | null }
@@ -51,6 +56,8 @@ export const api = {
   inboxForm: async (form: FormData) => { const r = await fetch("/api/inbox", { method: "POST", body: form }); if (!r.ok) throw new Error(await r.text()); return r.json() as Promise<{ job: Job }>; },
   jobs: () => req<Job[]>("/jobs"),
   job: (id: string) => req<Job>(`/jobs/${id}`),
+  /** Long-poll: resolves when the job is done/failed, or after `wait` seconds (≤ 50) with it still running. */
+  jobWait: (id: string, wait = 25) => req<Job>(`/jobs/${id}/wait?wait=${wait}`),
   runJob: (kind: string, payload?: unknown) => req<Job>("/jobs", { method: "POST", body: JSON.stringify({ kind, payload }) }),
   chat: () => req<ChatMessage[]>("/chat"),
   ask: (question: string) => req<{ message: ChatMessage; job: Job }>("/chat", { method: "POST", body: JSON.stringify({ question }) }),

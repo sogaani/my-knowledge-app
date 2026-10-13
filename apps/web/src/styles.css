@@ -142,6 +142,7 @@
     }
   a { @apply text-primary underline-offset-4 hover:underline; }
   code { @apply rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]; }
+  mark { @apply rounded-sm bg-warn/25 px-0.5 text-inherit; }
 }
 
 /* Note markdown (react-markdown output; see components/Md.tsx). */

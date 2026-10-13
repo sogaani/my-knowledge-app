@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import {
   runQuery, parseFilters, readNote, patchFrontmatter, createNote, DuplicateError, extractLinks, currentRecommendation, reactToSuggestion,
-  keywordSearch, monthlyByCurrency, errorHead, similarNotes, resurface, LAYOUT, SILVER_PREFIX, GOLD_PREFIX, type SearchResponse, type SearchMode, type Reaction,
+  keywordSearch, monthlyByCurrency, errorHead, similarNotes, neighborNotes, noteHeads, resurface, LAYOUT, SILVER_PREFIX, GOLD_PREFIX, type SearchResponse, type SearchMode, type Reaction,
 } from "@kb/core";
 import { env } from "./env";
 import { authenticate, requireUser, requireWorker, requireInboxWriter, requireUserOrWorker, type Principal } from "./auth";
@@ -14,7 +14,7 @@ import {
   addInboxItem, inboxItemNameExists, inboxItemsForJob, getInboxItem, markInboxFetched, addChat, listChat, newId, type JobKind,
   addPushSubscription, deletePushSubscription, listPushSubscriptions, recordView, lastViewed, viewCount,
 } from "./store";
-import { pushEnabled, sendPushToAll, type PushPayload } from "./push";
+import { askDonePush, pushEnabled, sendPushToAll, type PushPayload } from "./push";
 
 type Vars = { principal: Principal; timing: [string, number][] };
 const app = new Hono<{ Variables: Vars }>();
@@ -137,7 +137,11 @@ function noteDetail(rel: string) {
     }
   }
   // similar: nearest notes by embedding (900_system/similar.json → SQLite `similar`; see docs/search.md)
-  return { path: note.path, type: note.type, title: note.title, fm: note.fm, body: note.body, archived: note.archived, links: extractLinks(note), backlinks, attachments, similar: similarNotes(db, note.path) };
+  // prev / next: the neighbours in the type's list (same order as /notes?type=), so a note page can be walked through
+  return {
+    path: note.path, type: note.type, title: note.title, fm: note.fm, body: note.body, archived: note.archived, links: extractLinks(note), backlinks, attachments,
+    similar: similarNotes(db, note.path), ...neighborNotes(db, note.path),
+  };
 }
 /** Showing the page counts as a view: the previous one is reported (`viewed`) and this one recorded. */
 function viewed(d: NonNullable<ReturnType<typeof noteDetail>>) {
@@ -285,6 +289,13 @@ api.post("/inbox", requireInboxWriter, async (c) => {
 
 api.get("/jobs", requireUser, (c) => c.json(listJobs(Number(c.req.query("limit") ?? 50))));
 api.get("/jobs/:id", requireUser, (c) => { const j = getJob(c.req.param("id") ?? ""); return j ? c.json(j) : c.json({ error: "not found" }, 404); });
+/** Long-poll: answers with the job as soon as it is done/failed (woken by the worker's `done`), or unchanged after `wait` seconds. */
+api.get("/jobs/:id/wait", requireUser, async (c) => {
+  const id = c.req.param("id") ?? "";
+  if (!getJob(id)) return c.json({ error: "not found" }, 404);
+  const wait = Math.min(Math.max(Number(c.req.query("wait") ?? 25), 0), 50);
+  return c.json(await timed(c, "wait", () => waitForJob(id, wait * 1000)));
+});
 /** Jobs queued with the worker credentials come from launchd (enqueue.sh): marked `scheduled` so the worker knows to send the morning digest. */
 api.post("/jobs", requireUserOrWorker, async (c) => {
   const b = (await c.req.json()) as { kind: JobKind; payload?: unknown };
@@ -293,7 +304,13 @@ api.post("/jobs", requireUserOrWorker, async (c) => {
   return c.json(createJob(b.kind, c.get("principal").kind === "worker" ? { ...payload, scheduled: true } : payload));
 });
 
-api.get("/chat", requireUser, (c) => c.json(listChat()));
+/** Each answer's `sources` (note paths from the ask skill) come back as `sourceNotes` with their titles, for the cards in the chat. */
+api.get("/chat", requireUser, (c) => {
+  const msgs = listChat();
+  const paths = (s: string): string[] => { try { const v = JSON.parse(s || "[]"); return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []; } catch { return []; } };
+  const heads = noteHeads(db, msgs.flatMap((m) => paths(m.sources)));
+  return c.json(msgs.map((m) => ({ ...m, sourceNotes: paths(m.sources).map((p) => heads.get(p) ?? { path: p, type: "", title: basename(p, ".md"), status: "", summary: "" }) })));
+});
 api.post("/chat", requireUser, async (c) => {
   const { question } = (await c.req.json()) as { question: string };
   if (!question?.trim()) return c.json({ error: "empty" }, 400);
@@ -371,7 +388,7 @@ w.post("/jobs/:id/done", async (c) => {
     }
     if (b.notify?.title) pushes.push({ url: "/jobs", tag: "ops-digest", ...b.notify, body: String(b.notify.body ?? "").slice(0, 1000) });
     for (const p of pushes) sendPushToAll(p).then((r) => console.log(`push ${p.tag}: sent ${r.sent}, removed ${r.removed}, failed ${r.failed}`), (e) => console.error("push:", e));
-    if (b.ok) notifyJobDone(job.kind, payload).catch((e) => console.error("push:", e));
+    if (b.ok) notifyJobDone(job.kind, payload, { id, answer: b.answer }).catch((e) => console.error("push:", e));
   }
   return c.json({ ok: true });
 });
@@ -381,9 +398,16 @@ function batchOf(result: unknown): string[] | null {
   return Array.isArray(b) && b.length > 1 && b.every((x) => typeof x === "string") ? (b as string[]) : null;
 }
 const jobLabel = (kind: string, payload: Record<string, unknown>) => (kind === "skill" && payload.name ? `skill ${String(payload.name)}` : kind) + (payload.scheduled ? " (定期)" : "");
-/** Push notifications for jobs people wait for. trade-plan: only when today's (JST) sheet exists, so a 休場 run stays silent. */
-async function notifyJobDone(kind: string, payload: Record<string, unknown>) {
+/**
+ * Push notifications for jobs people wait for. ask: the answer landed in the chat (the question is the title, the answer's
+ * head the body), so the page need not stay open. trade-plan: only when today's (JST) sheet exists, so a 休場 run stays silent.
+ */
+async function notifyJobDone(kind: string, payload: Record<string, unknown>, done: { id: string; answer?: string }) {
   if (!pushEnabled()) return;
+  if (kind === "ask") {
+    const r = await sendPushToAll(askDonePush(String(payload.question ?? ""), done.answer ?? "", done.id));
+    console.log(`push ask ${done.id.slice(0, 8)}: sent ${r.sent}, removed ${r.removed}, failed ${r.failed}`);
+  }
   if (kind === "skill" && payload.name === "trade-plan") {
     const jst = new Date(Date.now() + 9 * 3600_000).toISOString().slice(0, 10);
     const wanted = /date=(\d{4}-\d{2}-\d{2})/.exec(String(payload.args ?? ""))?.[1] ?? jst;

@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
+import { termsRegex } from "@/lib/terms";
 import { errMsg } from "@/lib/useAction";
 import { cn } from "@/lib/utils";
 
@@ -31,7 +32,23 @@ export const Chip = ({ children, className }: { children: React.ReactNode; class
   <Badge variant="secondary" className={cn("font-normal", className)}>{children}</Badge>
 );
 
-export const NoteLink = ({ n }: { n: NoteSummary | { path: string; title: string } }) => <Link to={`/note/${n.path}`}>{n.title}</Link>;
+export const NoteLink = ({ n, children }: { n: NoteSummary | { path: string; title: string }; children?: React.ReactNode }) => <Link to={`/note/${n.path}`}>{children ?? n.title}</Link>;
+
+/** `text` with every query term wrapped in <mark> (terms from lib/terms.ts queryTerms; nothing to mark → plain text). */
+export function Hl({ text, terms }: { text: string; terms: string[] }) {
+  const re = termsRegex(terms);
+  if (!re || !text) return <>{text}</>;
+  const out: React.ReactNode[] = [];
+  let last = 0;
+  for (const m of text.matchAll(re)) {
+    const at = m.index ?? 0;
+    if (at > last) out.push(text.slice(last, at));
+    out.push(<mark key={at}>{m[0]}</mark>);
+    last = at + m[0].length;
+  }
+  if (last < text.length) out.push(text.slice(last));
+  return <>{out}</>;
+}
 
 /** Load errors shown inline (action errors go to toasts via useAction). */
 export const Err = ({ e }: { e: unknown }) =>

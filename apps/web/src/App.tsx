@@ -1,5 +1,8 @@
-import { NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { NavLink, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { SearchIcon } from "lucide-react";
 import { routeFor } from "@/components/Md";
+import { Input } from "@/components/ui/input";
 import { Toaster } from "@/components/ui/sonner";
 import { cn } from "@/lib/utils";
 import Home from "./pages/Home";
@@ -36,6 +39,7 @@ export default function App() {
     <div className="grid min-h-screen grid-rows-[auto_1fr] md:grid-cols-[220px_1fr] md:grid-rows-none">
       <nav className="flex flex-wrap content-start items-start gap-1 border-b px-3 py-2.5 md:sticky md:top-0 md:block md:h-screen md:space-y-0.5 md:overflow-auto md:border-r md:border-b-0 md:px-3.5 md:py-5">
         <h1 className="mb-1.5 w-full px-2.5 text-[15px] font-semibold tracking-wide md:mb-4">my-knowledge</h1>
+        <HeaderSearch />
         <Item to="/" end>ホーム</Item>
         <Item to="/inbox">投げ込み</Item>
         <Item to="/chat">チャット</Item>
@@ -66,6 +70,32 @@ export default function App() {
       </main>
       <Toaster position="bottom-right" richColors closeButton />
     </div>
+  );
+}
+
+/** Always-on search box: submits to /search?q=…; the `/` key focuses it from anywhere (outside a text field). */
+function HeaderSearch() {
+  const navigate = useNavigate();
+  const loc = useLocation();
+  const ref = useRef<HTMLInputElement>(null);
+  const [q, setQ] = useState("");
+  // keep the box in step with the URL on the search page (so going back shows the query that was run)
+  useEffect(() => { if (loc.pathname === "/search") setQ(new URLSearchParams(loc.search).get("q") ?? ""); }, [loc.pathname, loc.search]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "/" || e.ctrlKey || e.metaKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+      e.preventDefault(); ref.current?.focus(); ref.current?.select();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+  return (
+    <form className="relative mb-1 w-full md:mb-3" role="search" onSubmit={(e) => { e.preventDefault(); const t = q.trim(); if (t) navigate(`/search?q=${encodeURIComponent(t)}`); ref.current?.blur(); }}>
+      <SearchIcon className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+      <Input ref={ref} type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="検索（/ でフォーカス）" aria-label="ノートを検索" className="h-8 pl-7 text-sm" />
+    </form>
   );
 }
 

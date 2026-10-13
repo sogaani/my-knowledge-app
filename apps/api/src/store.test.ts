@@ -90,6 +90,24 @@ describe("claimQueuedJobs", () => {
   });
 });
 
+describe("waitJobEvent", () => {
+  test("wakes when the job finishes, and on its own after the timeout", async () => {
+    const job = s.createJob("ask", { question: "q" });
+    const t0 = Date.now();
+    const woke = s.waitJobEvent(`done:${job.id}`, 5000).then(() => Date.now() - t0);
+    s.finishJob(job.id, true, null);
+    expect(await woke).toBeLessThan(1000);
+    const t1 = Date.now();
+    await s.waitJobEvent("done:never", 30);
+    expect(Date.now() - t1).toBeGreaterThanOrEqual(25);
+    // a job queued wakes the worker's long-poll
+    const queued = s.waitJobEvent("queued", 5000);
+    const other = s.createJob("ingest", {});
+    await queued;
+    s.finishJob(other.id, true, null);
+  });
+});
+
 describe("views", () => {
   test("records each page view and answers the last one per path", () => {
     const a = "200_silver/204_books/a.md", b = "200_silver/204_books/b.md";

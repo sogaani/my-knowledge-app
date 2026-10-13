@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { Database } from "bun:sqlite";
 import { loadConfig } from "./config";
 import { indexNotes, openDb } from "./db";
-import { queryTerms, runQuery } from "./query";
+import { neighborNotes, noteHeads, queryTerms, runQuery } from "./query";
 import { bodyExcerpt, keywordSearch } from "./search";
 
 describe("queryTerms", () => {
@@ -91,6 +91,23 @@ describe("runQuery text search (SQLite fallback path)", () => {
     const [sp] = keywordSearch(db, "執事", [], { spoilers: true });
     expect(sp.matches[0].snippet).toContain("執事");
     expect(keywordSearch(db, "執事", [], {})[0].matches[0].snippet).not.toContain("執事");
+  });
+  test("noteHeads answers the header fields of indexed paths only", () => {
+    const heads = noteHeads(db, ["200_silver/204_books/island.md", "200_silver/204_books/space.md", "200_silver/204_books/gone.md", "200_silver/204_books/island.md"]);
+    expect(heads.size).toBe(2);
+    expect(heads.get("200_silver/204_books/island.md")).toEqual({ path: "200_silver/204_books/island.md", type: "book", title: "嵐の島の殺人", status: "done", summary: "孤島に集まった十人が一人ずつ消えていく本格ミステリ" });
+    expect(noteHeads(db, []).size).toBe(0);
+  });
+  test("neighborNotes walks the same-type list in updated-desc order", () => {
+    // list order: cooking (09-04), city (09-03), space (09-02), island (09-01)
+    const at = (name: string) => neighborNotes(db, `200_silver/204_books/${name}.md`);
+    expect(at("cooking").prev).toBeNull();
+    expect(at("cooking").next?.title).toBe("都市の夜");
+    expect(at("city").prev?.title).toBe("家庭料理の基本");
+    expect(at("city").next?.title).toBe("宇宙ミステリー入門");
+    expect(at("island").prev?.title).toBe("宇宙ミステリー入門");
+    expect(at("island").next).toBeNull();
+    expect(at("nope")).toEqual({ prev: null, next: null });
   });
   test("bodyExcerpt windows around the first term", () => {
     const ex = bodyExcerpt("## A\n\n" + "x".repeat(300) + "\n\n## B\n\n" + "y".repeat(200) + "ラーメン" + "z".repeat(300), "ラーメン", 60);

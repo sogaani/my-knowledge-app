@@ -34,3 +34,9 @@ export async function sendPushToAll(p: PushPayload): Promise<{ sent: number; rem
   }));
   return r;
 }
+
+/** The ask-done notification: one line of the question as the title, the answer's first ~200 chars (whitespace folded) as the body. */
+export function askDonePush(question: string, answer: string, id: string): PushPayload {
+  const one = (s: string, n: number) => { const t = s.replace(/\s+/g, " ").trim(); return t.length > n ? t.slice(0, n - 1) + "…" : t; };
+  return { title: `回答: ${one(question, 60) || "(質問なし)"}`, body: one(answer, 200), url: "/chat", tag: `ask-${id}` };
+}

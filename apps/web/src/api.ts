@@ -1,6 +1,17 @@
-export interface NoteSummary { path: string; type: string; title: string; status: string; summary: string; tags: string[]; fm: Record<string, unknown>; archived: boolean; updated: string }
+/** `viewed`: when the note page was last shown (API `views` table), null = never. */
+export interface NoteSummary { path: string; type: string; title: string; status: string; summary: string; tags: string[]; fm: Record<string, unknown>; archived: boolean; updated: string; viewed?: string | null }
+export interface SimilarNote { path: string; type: string; title: string; status: string; summary: string; score: number }
 /** `attachment`: set when a log.md / tasks.md path was asked for; the payload is then its folder entity's README note. */
-export interface NoteDetail { path: string; type: string; title: string; fm: Record<string, unknown>; body: string; archived: boolean; links: string[]; backlinks: string[]; attachments: Record<string, string>; attachment?: string }
+export interface NoteDetail {
+  path: string; type: string; title: string; fm: Record<string, unknown>; body: string; archived: boolean; links: string[]; backlinks: string[]; attachments: Record<string, string>; attachment?: string;
+  /** Nearest notes by embedding (from `kb embed`); empty until the Mac has embedded and pushed. */
+  similar: SimilarNote[];
+  /** The view before this one, and how many times the page was shown before. */
+  viewed?: string | null; views?: number;
+}
+/** What to look at again today (Gold 393): due for review, written on this day in an earlier year, three random picks. */
+export interface ResurfaceEntry { path: string; type: string; title: string; status: string; summary: string; encrypted: boolean; reason: string; date: string; overdue?: boolean; viewed?: string | null }
+export interface Resurface { date: string; due: ResurfaceEntry[]; onThisDay: ResurfaceEntry[]; random: ResurfaceEntry[] }
 export interface Job { id: string; kind: string; status: "queued" | "running" | "done" | "failed"; payload: string; result: string | null; log: string; commit: string | null; created_at: string; started_at: string | null; finished_at: string | null }
 export interface ChatMessage { id: string; role: "user" | "assistant"; text: string; sources: string; job_id: string | null; created_at: string }
 export interface SearchMatch { path: string; heading: string; snippet: string; spoiler: boolean; via: ("vector" | "keyword")[]; vectorDistance?: number; bm25?: number }
@@ -9,7 +20,7 @@ export interface SearchResponse { hits: SearchHit[]; mode: "hybrid" | "vector" |
 export interface TypeDef { type: string; folder: string; entity: string; statuses: string[]; fields: string[] }
 export interface Home {
   counts: { type: string; c: number }[]; monthlySubscriptions: { currency: string; amount: number }[]; activeSubscriptions: number; // monthly totals per currency, never summed across
-  books: Record<string, number>; media: Record<string, number>; projects: NoteSummary[]; recent: NoteSummary[]; jobs: Job[];
+  books: Record<string, number>; media: Record<string, number>; projects: NoteSummary[]; recent: NoteSummary[]; jobs: Job[]; resurface: Resurface;
   lint: Record<string, string[] | unknown[]>; head: string; unpushed?: number; pushError?: string | null; // `bronze` is a per-kind summary, not a problem list
 }
 

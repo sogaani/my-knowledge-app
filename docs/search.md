@@ -23,7 +23,7 @@ Mac                                                k8s API pod (KB_EMBED=off, La
 | `chunk.ts` | H2 節ごとに chunk。先頭に title/summary/tags/スカラー frontmatter の header chunk。`> [!spoiler]` は独立 chunk（`spoiler=true`）。`log.md`/`tasks.md` は README の chunk として取り込む。`noteHash` で増分判定。ノイズ対策は下の「chunk の作り方」 |
 | `embed.ts` | Ollama `/api/embed` クライアント。モデルごとの次元・クエリ/文書プレフィックス（bge-m3 は不要）。`ping()` でモデル未取得も検知 |
 | `lindera.ts` | `@lancedb/lancedb` 0.40.0 に同梱の lindera 3.0.7 と同じ版の辞書を GitHub Releases から取得し `config.yml` を書く。不在なら `icu` にフォールバック |
-| `vector.ts` | LanceDB テーブル `chunks` の作成・増分更新（hash 差分で削除→追加）・FTS 索引作成・`optimize()`。`meta.json` の model/dim/tokenizer/chunker が変わったら全再構築 |
+| `vector.ts` | LanceDB テーブル `chunks` の作成・増分更新（hash 差分で削除→追加）・FTS 索引作成・`optimize()`。`meta.json` の model/dim/tokenizer/chunker が変わったら全再構築。埋め込み後に「似たノート」（`computeSimilar`）を `900_system/similar.json` に書く（下の「似たノート」） |
 | `search.ts` | vector top-k + FTS top-k → RRF(k=60、vector だけが拾った `thin` chunk は 0.5 倍）→ 距離の足切り（`cutoff`）→ ノート単位に集約して `confidence` を付ける → SQLite の frontmatter で残りの条件を評価。Lance/Ollama 不在時は SQLite キーワード検索（`keywordSearch`）に degrade |
 | `query.ts` | `kb query --text` と API の `GET /api/notes?text=`、および上の縮退経路が使う SQLite 検索。`queryTerms` が辞書なしでクエリを語に割る |
 
@@ -69,6 +69,24 @@ API pod（`KB_EMBED=off`）と、Mac が応答しないときの WebUI はこの
 - 一致判定: 各語を title / summary / tags / body に LIKE（部分一致）で当て、含む語の数（`matched`）を数える。全語を含むノートがあればそれだけ（AND）、なければ 1 語でも含むノート（OR）を返す。trigram FTS5 は 3 文字未満の語を引けないので、2 文字の漢語（孤島・銘柄）は LIKE が担う。
 - 順位: `matched` の多い順 → スコア順。スコアは、3 文字以上の語は `bm25(notes_fts, 0, 10, 5, 3, 1)`（title 10 / summary 5 / tags 3 / body 1。先頭の 0 は UNINDEXED の path 列）、2 文字の語は同じ列重みを LIKE で加算したもの。`--order` を指定すると `matched` 順の中でその並びになる。
 - snippet（`keywordSearch`）: 本文（先頭の `# タイトル` 行を除く）で最初に語が出る場所の前後 160 文字と、その直前の見出し。本文に語がなければ summary。`> [!spoiler]` は `spoilers` を指定しない限り除いてから探す。
+
+## 似たノート（`similar`）
+
+ノートページの「似たノート」と、被リンク 0 のノートの行き先。LanceDB は Mac にしか無いので、Mac が計算した結果をデータリポジトリ経由で API pod に届ける。
+
+```
+Mac: kb embed / kb build(→embed)                         k8s API pod（LanceDB なし）
+  embedNotes → 変更があれば computeSimilar(store)          git pull（sync）→ indexNotes → loadSimilar
+    各ノートの header chunk（idx 0, archived=false）で        900_system/similar.json → SQLite `similar(path, other, score)`
+    vectorSearch（同じノートを除く）→ ノート単位に最良 chunk     GET /api/notes/<path> の `similar`（similarNotes: notes と JOIN）
+    距離 ≤ SIMILAR_MAX_DISTANCE（0.50）の上位 SIMILAR_K（5）
+  → 900_system/similar.json（1 ペア 1 行、ソート済み）→ worker の commitAll / 手動コミットで push
+```
+
+- `similar.json` は `{model, chunker, updatedAt, k, pairs: [[path, other, score], …]}`。score は `1 - cosine 距離` の小数 3 桁。パスとスコアだけで、タイトルや要約は入れない（暗号化ドメインのパスはファイル名として元々平文）。
+- 足切りは `VECTOR_STRONG` と同じ 0.50（距離 0.50〜0.55 の近傍は `low` 相当で、学習ノートの隣に無関係な銘柄が並んだ）。実データ（2026-10-13、194 ノート）では 188 ノートに 935 ペア、score 0.50〜0.997。一括取り込みの本は summary が定型なので本同士が近く出やすい（header chunk に summary が入るため）。
+- `indexNotes` が毎回 `loadSimilar` を呼び、ファイルの mtime + size が `meta.similar_loaded` と違うときだけ `similar` テーブルを入れ替える。API pod の索引は emptyDir で起動ごとに作り直すが、`similar.json` は git にあるので起動時の full index で載る。pod 自身は `KB_EMBED=off` で計算しない。
+- 再計算の条件: `embedNotes` で 1 ノートでも埋め込み・削除があったとき、全再構築のとき、またはファイルが無いとき（近傍は他のノートの追加でも変わるので差分更新しない。190 ノートで 1 秒未満）。足切りや K を変えたら `similar.json` を消して `kb build`（または `kb embed --full`）。
 
 ## 運用
 

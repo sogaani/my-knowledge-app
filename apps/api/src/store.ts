@@ -35,6 +35,8 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 CREATE TABLE IF NOT EXISTS push_subscriptions (
   endpoint TEXT PRIMARY KEY, json TEXT NOT NULL, email TEXT, user_agent TEXT, created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS views (path TEXT NOT NULL, viewed_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS views_path ON views(path, viewed_at);
 `);
 // added after the first release: older jobs.sqlite files lack the column
 if (!(store.query("PRAGMA table_info(jobs)").all() as { name: string }[]).some((c) => c.name === "heartbeat_at")) store.exec("ALTER TABLE jobs ADD COLUMN heartbeat_at TEXT");
@@ -141,6 +143,24 @@ export function addChat(role: ChatMessage["role"], text: string, jobId: string |
 }
 export function listChat(limit = 100): ChatMessage[] {
   return (store.query("SELECT * FROM chat_messages ORDER BY created_at DESC LIMIT ?").all(limit) as ChatMessage[]).reverse();
+}
+
+// ---- Note views: one row per note page shown (GET /api/notes/*), so lists can say when a note was last looked at ----
+export function recordView(path: string) {
+  store.run("INSERT INTO views(path,viewed_at) VALUES(?,?)", [path, now()]);
+}
+/** Last view per path (ISO), only for paths that were viewed. */
+export function lastViewed(paths: string[]): Map<string, string> {
+  const out = new Map<string, string>();
+  for (let i = 0; i < paths.length; i += 500) {
+    const slice = paths.slice(i, i + 500);
+    const rows = store.query(`SELECT path, MAX(viewed_at) AS at FROM views WHERE path IN (${slice.map(() => "?").join(",")}) GROUP BY path`).all(...slice) as { path: string; at: string }[];
+    for (const r of rows) out.set(r.path, r.at);
+  }
+  return out;
+}
+export function viewCount(path: string): number {
+  return (store.query("SELECT COUNT(*) c FROM views WHERE path=?").get(path) as { c: number }).c;
 }
 
 // ---- Web Push subscriptions (one row per browser; the endpoint is the identity) ----

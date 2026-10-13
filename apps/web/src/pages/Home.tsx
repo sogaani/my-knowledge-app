@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, type Home as HomeData } from "@/api";
-import { Chip, Err, Loading, NoteLink, PageTitle, Section, Status } from "@/components/common";
+import { Chip, Err, Loading, NoteLink, PageTitle, Section, Status, Viewed } from "@/components/common";
 import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
 import { formatTotals } from "@/lib/utils";
@@ -44,6 +44,14 @@ export default function Home() {
           <Section>進行中プロジェクト</Section>
           {d.projects.length === 0 && <p className="text-muted-foreground">なし</p>}
           <ul className="list-disc space-y-1 pl-5">{d.projects.map((p) => <li key={p.path}><NoteLink n={p} /> {p.fm.due ? <span className="text-sm text-muted-foreground">期限 {String(p.fm.due)}</span> : null}<div className="text-sm text-muted-foreground">{p.summary}</div></li>)}</ul>
+          <Section>今日見直す <Link to="/gold/393_resurface" className="ml-2 text-sm font-normal">393 →</Link></Section>
+          {d.resurface.due.length === 0 && d.resurface.onThisDay.length === 0 && d.resurface.random.length === 0 && <p className="text-muted-foreground">なし</p>}
+          <ul className="list-disc space-y-1 pl-5 text-sm">
+            {d.resurface.due.slice(0, 8).map((e) => <li key={e.path}>{e.overdue && <b className="text-destructive">超過 </b>}<NoteLink n={e} /> <Chip>{typeLabel(e.type)}</Chip> <span className="text-muted-foreground">{e.reason}</span> <Viewed at={e.viewed} /></li>)}
+            {d.resurface.due.length > 8 && <li className="text-muted-foreground">…他 {d.resurface.due.length - 8} 件</li>}
+            {d.resurface.onThisDay.map((e) => <li key={e.path}><span className="text-muted-foreground">{e.reason}の今日: </span><NoteLink n={e} /> <Chip>{typeLabel(e.type)}</Chip> <Viewed at={e.viewed} /></li>)}
+            {d.resurface.random.map((e) => <li key={e.path}><span className="text-muted-foreground">ランダム: </span><NoteLink n={e} /> <Chip>{typeLabel(e.type)}</Chip> <Viewed at={e.viewed} /></li>)}
+          </ul>
           <Section>保守</Section>
           <ul className="list-disc space-y-1 pl-5 text-sm">
             {lintIssues(d.lint).filter(([, v]) => v.length).map(([k, v]) => <li key={k}><b>{k}</b>: {v.length} 件 <span className="text-muted-foreground">{v.slice(0, 3).join(", ")}{v.length > 3 ? " …" : ""}</span></li>)}
@@ -58,7 +66,7 @@ export default function Home() {
                 <TableCell className="align-top text-muted-foreground">{n.updated}</TableCell>
                 <TableCell className="align-top"><Chip>{typeLabel(n.type)}</Chip></TableCell>
                 <TableCell className="whitespace-normal"><NoteLink n={n} /><div className="text-sm text-muted-foreground">{n.summary}</div></TableCell>
-                <TableCell className="align-top"><Status s={n.status} /></TableCell>
+                <TableCell className="align-top"><Status s={n.status} /><div><Viewed at={n.viewed} /></div></TableCell>
               </TableRow>
             ))}
           </TableBody></Table>

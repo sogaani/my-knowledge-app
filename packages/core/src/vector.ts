@@ -10,6 +10,7 @@ import { walkNotes, type Note } from "./notes";
 import { parseNote } from "./frontmatter";
 import { chunkNote, noteHash, CHUNKER_VERSION, type Chunk } from "./chunk";
 import type { Embedder } from "./embed";
+import type { SimilarFile } from "./db";
 import { applyLanguageModelHome, resolveTokenizer } from "./lindera";
 
 type Lance = typeof import("@lancedb/lancedb");
@@ -27,7 +28,7 @@ export interface ChunkRow {
   _distance?: number; _score?: number;
 }
 
-export interface EmbedStats { embedded: number; skipped: number; removed: number; chunks: number; rows: number; tokenizer: string; fallback?: string; full: boolean }
+export interface EmbedStats { embedded: number; skipped: number; removed: number; chunks: number; rows: number; tokenizer: string; fallback?: string; full: boolean; /** note pairs written to similar.json (undefined when nothing changed) */ similar?: number }
 
 let lanceMod: Promise<Lance> | null = null;
 /** Lazy so processes that never search (e.g. the API pod) never load the native module. */
@@ -212,5 +213,51 @@ export async function embedNotes(cfg: KbConfig, store: VectorStore, embedder: Em
   }
   stats.rows = await store.countRows();
   store.writeMeta({ ...want, updatedAt: new Date().toISOString(), rows: stats.rows });
+  // neighbours change whenever any note does, so the file is rewritten after every run that touched the table
+  if (stats.embedded || stats.removed || full || !existsSync(cfg.similarPath)) {
+    const pairs = await computeSimilar(store);
+    writeSimilar(cfg, { model: want.model, chunker: want.chunker, updatedAt: new Date().toISOString().slice(0, 10), k: SIMILAR_K, pairs });
+    stats.similar = pairs.length;
+    log(`similar: ${pairs.length} pairs -> ${cfg.similarPath}`);
+  }
   return stats;
+}
+
+/** Neighbours kept per note. */
+export const SIMILAR_K = 5;
+/** Cosine distance beyond which a neighbour is not listed: search.ts's VECTOR_STRONG (the `high` line), see docs/search.md. */
+export const SIMILAR_MAX_DISTANCE = 0.5;
+
+/**
+ * For every live (non-archived) note, the nearest other notes by its header chunk (title / summary / tags): the best
+ * chunk of each other note within SIMILAR_MAX_DISTANCE, top SIMILAR_K. Scores are `1 - distance`, 3 decimals.
+ * Pairs are sorted so the committed file diffs cleanly.
+ */
+export async function computeSimilar(store: VectorStore, opts: { k?: number; maxDistance?: number } = {}): Promise<[string, string, number][]> {
+  const k = opts.k ?? SIMILAR_K, maxDistance = opts.maxDistance ?? SIMILAR_MAX_DISTANCE;
+  if (!store.table) return [];
+  const heads = (await store.table.query().where("idx = 0 AND archived = false").select(["note_path", "vector"]).toArray()) as { note_path: string; vector: ArrayLike<number> }[];
+  const out: [string, string, number][] = [];
+  for (const h of heads) {
+    const hits = await store.vectorSearch(Array.from(h.vector), { where: `archived = false AND note_path != ${sqlStr(h.note_path)}`, limit: k * 4 });
+    const best = new Map<string, number>();
+    for (const r of hits) {
+      const d = r._distance ?? Infinity;
+      if (d > maxDistance) continue;
+      if (!best.has(r.note_path) || d < best.get(r.note_path)!) best.set(r.note_path, d);
+    }
+    [...best.entries()].sort((a, b) => a[1] - b[1] || a[0].localeCompare(b[0])).slice(0, k)
+      .forEach(([other, d]) => out.push([h.note_path, other, Math.round((1 - d) * 1000) / 1000]));
+  }
+  return out.sort((a, b) => a[0].localeCompare(b[0]) || b[2] - a[2] || a[1].localeCompare(b[1]));
+}
+
+/** Write `900_system/similar.json` (one pair per line, so git diffs show which neighbours moved). */
+export function writeSimilar(cfg: KbConfig, file: SimilarFile): void {
+  mkdirSync(join(cfg.similarPath, ".."), { recursive: true });
+  const head = JSON.stringify({ model: file.model, chunker: file.chunker, updatedAt: file.updatedAt, k: file.k }).slice(0, -1);
+  writeFileSync(cfg.similarPath, `${head}, "pairs": [
+${file.pairs.map((p) => JSON.stringify(p)).join(",\n")}
+]}
+`);
 }

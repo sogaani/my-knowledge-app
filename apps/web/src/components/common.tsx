@@ -72,3 +72,11 @@ export function Choice({ value, onChange, options, className, disabled, id }: {
 }
 
 export const fmtDate = (s: string) => s ? new Date(s).toLocaleString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
+/** Last view of a note as "3 日前" / "今日" / "未読" (ISO in, from the API's `views` table). */
+export const fmtViewed = (iso: string | null | undefined): string => {
+  if (!iso) return "未読";
+  const days = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
+  return days <= 0 ? "今日" : days === 1 ? "昨日" : days < 30 ? `${days} 日前` : days < 365 ? `${Math.floor(days / 30)} か月前` : `${Math.floor(days / 365)} 年前`;
+};
+/** Muted "閲覧: …" tag, used wherever a note row shows when it was last looked at. */
+export const Viewed = ({ at }: { at: string | null | undefined }) => <span className="text-xs text-muted-foreground" title={at ? new Date(at).toLocaleString("ja-JP") : "まだ開いていない"}>閲覧 {fmtViewed(at)}</span>;

@@ -17,6 +17,8 @@ export interface KbConfig {
   lanceDir: string;
   /** Lance language-model home (Lindera dictionaries). Derived, gitignored. */
   langModelHome: string;
+  /** `900_system/similar.json` (SIMILAR_REL): nearest notes, tracked in git so the API pod gets them. */
+  similarPath: string;
   embedding: EmbeddingConfig;
   local: LocalConfig;
 }
@@ -71,7 +73,15 @@ export const GOLD = {
   daily: "390_daily.md",
   trends: "391_trends.md",
   upcoming: "392_upcoming.md",
+  /** Plaintext (unlike 390–392): encrypted domains appear by count only. */
+  resurface: "393_resurface.md",
 } as const;
+
+/**
+ * Nearest notes per note (from the LanceDB header chunks), written by `kb embed` on the Mac and committed with the
+ * data repo so the API pod (no LanceDB) can load it into its SQLite `similar` table. Paths and scores only.
+ */
+export const SIMILAR_REL = `${LAYOUT.system}/similar.json`;
 
 /** Repo-relative prefixes, for `path.startsWith(...)` and SQL `LIKE` checks. */
 export const SILVER_PREFIX = `${LAYOUT.silver}/`;
@@ -121,6 +131,7 @@ export function loadConfig(root = findRoot()): KbConfig {
     dbPath: process.env.KB_DB ?? join(sys, "cache", "kb.sqlite"),
     lanceDir: process.env.KB_LANCE ?? join(sys, "cache", "lance"),
     langModelHome: process.env.LANCE_LANGUAGE_MODEL_HOME ?? join(sys, "cache", "lance", "language_models"),
+    similarPath: join(root, SIMILAR_REL),
     embedding: embeddingConfig(local.embedding ?? {}),
     local,
   };

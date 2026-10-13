@@ -8,7 +8,9 @@
 import { processState, walkBronze } from "./bronze";
 import { lastBackupAt } from "./backup";
 import { loadState, type CollectState } from "./collect/run";
+import type { Database } from "bun:sqlite";
 import { SILVER_PREFIX, type KbConfig } from "./config";
+import { resurface, splitEncrypted, type ResurfaceEntry } from "./resurface";
 
 export interface CollectSourceSummary {
   id: string;
@@ -37,6 +39,8 @@ export interface OpsDigest {
   /** Days since the last real (non-dry) `kb backup`; null = never ran. */
   backupDays: number | null;
   agentOk: boolean;
+  /** Notes to look at again today (resurface.ts, the same list as Gold 393); null when the digest was built without the index. */
+  review: { due: number; onThisDay: number; /** plaintext entries only (the digest text is stored in the API's job table) */ top: ResurfaceEntry[] } | null;
 }
 
 /** Collapse an HTTP error body (often a Cloudflare HTML page) to one line of at most `max` characters. */
@@ -119,6 +123,8 @@ export interface OpsDigestInput {
   agentOk: boolean;
   /** `gitStatusPaths` of Silver before the commit. */
   changes: { status: string; path: string }[];
+  /** The note index (after `kb build`), for the "今日見直す" line; omitted = no such line. */
+  db?: Database;
 }
 
 /** Read collect-state.json, Bronze and backup.log and combine them with what this ingest did. */
@@ -136,7 +142,13 @@ export function buildOpsDigest(cfg: KbConfig, input: OpsDigestInput): OpsDigest 
     unprocessedBronze,
     backupDays: backup ? Math.floor((now.getTime() - backup.getTime()) / 86400_000) : null,
     agentOk: input.agentOk,
+    review: input.db ? reviewSummary(input.db, localDate(now)) : null,
   };
+}
+
+function reviewSummary(db: Database, date: string): OpsDigest["review"] {
+  const r = resurface(db, date);
+  return { due: r.due.length, onThisDay: r.onThisDay.length, top: splitEncrypted(r.due).plain.slice(0, 5) };
 }
 
 /** Title and a short body for the push notification (a few lines; platforms truncate beyond that). */
@@ -144,6 +156,7 @@ export function formatOpsDigest(d: OpsDigest): { title: string; body: string } {
   const [, m, day] = d.date.split("-");
   const title = `${d.agentOk ? "" : "[失敗] "}運用ダイジェスト ${Number(m)}/${Number(day)}`;
   const lines = [collectLine(d), notesLine(d)];
+  if (d.review) lines.push(reviewLine(d.review));
   if (d.judgements.length) {
     const first = d.judgements[0]!;
     lines.push(`迷った点 ${d.judgements.length}: ${first.length > 80 ? `${first.slice(0, 80)}…` : first}`);
@@ -155,8 +168,17 @@ export function formatOpsDigest(d: OpsDigest): { title: string; body: string } {
 export function renderOpsDigest(d: OpsDigest): string {
   const lines = [`# 運用ダイジェスト ${d.date}${d.agentOk ? "" : "（ingest 失敗）"}`, "", collectLine(d), `inbox: feed ${d.inbox.feeds} / mail ${d.inbox.mails} / その他 ${d.inbox.other}`, notesLine(d)];
   for (const s of d.collect) if (s.status === "failed") lines.push(`  ${s.id}: ${s.error}`);
+  if (d.review) {
+    lines.push(reviewLine(d.review));
+    for (const e of d.review.top) lines.push(`  ${e.title}: ${e.reason}`);
+  }
   if (d.judgements.length) lines.push("", "迷った点:", ...d.judgements.map((j) => `- ${j}`));
   return lines.join("\n");
+}
+
+/** "今日見直すノート N 件" — the count on Gold 393 / the WebUI home, so the morning push leads there. */
+function reviewLine(r: NonNullable<OpsDigest["review"]>): string {
+  return `今日見直すノート ${r.due} 件${r.onThisDay ? ` · 同じ月日の過去ノート ${r.onThisDay} 件` : ""}`;
 }
 
 function collectLine(d: OpsDigest): string {

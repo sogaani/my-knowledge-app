@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { PlusIcon, SearchIcon } from "lucide-react";
 import { api, type NoteSummary, type SearchResponse, type TypeDef } from "@/api";
-import { Chip, Choice, Err, NoteLink, PageTitle, Stars, Status, Toolbar } from "@/components/common";
+import { Chip, Choice, Err, NoteLink, PageTitle, Stars, Status, Toolbar, fmtViewed } from "@/components/common";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -124,14 +124,14 @@ export default function Notes() {
       )}
       {!semantic && (
         <Table className={busy ? "opacity-60 transition-opacity" : undefined}>
-          <TableHeader><TableRow><TableHead>タイトル</TableHead>{!type && <TableHead>type</TableHead>}<TableHead>状態</TableHead>{cols.map((c) => <TableHead key={c.key}>{c.label}</TableHead>)}<TableHead>要約</TableHead><TableHead>更新</TableHead></TableRow></TableHeader>
+          <TableHeader><TableRow><TableHead>タイトル</TableHead>{!type && <TableHead>type</TableHead>}<TableHead>状態</TableHead>{cols.map((c) => <TableHead key={c.key}>{c.label}</TableHead>)}<TableHead>要約</TableHead><TableHead>更新</TableHead><TableHead>閲覧</TableHead></TableRow></TableHeader>
           <TableBody>{rows.map((n) => (
             <TableRow key={n.path}>
               <TableCell className="whitespace-normal"><NoteLink n={n} />{n.archived && <Chip className="ml-1">archive</Chip>}</TableCell>
               {!type && <TableCell><Chip>{typeLabel(n.type)}</Chip></TableCell>}
               <TableCell><Status s={n.status} /></TableCell>
               {cols.map((c) => <TableCell key={c.key}>{c.key === "rating" ? <Stars n={n.fm[c.key]} /> : c.key === "price" ? fmtPrice(n.fm) : String(n.fm[c.key] ?? "")}</TableCell>)}
-              <TableCell className="min-w-48 whitespace-normal text-muted-foreground">{n.summary}</TableCell><TableCell className="text-muted-foreground">{n.updated}</TableCell>
+              <TableCell className="min-w-48 whitespace-normal text-muted-foreground">{n.summary}</TableCell><TableCell className="text-muted-foreground">{n.updated}</TableCell><TableCell className="text-muted-foreground" title={n.viewed ?? undefined}>{fmtViewed(n.viewed)}</TableCell>
             </TableRow>))}</TableBody>
         </Table>
       )}

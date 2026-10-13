@@ -6,7 +6,9 @@ import { join } from "node:path";
 import { loadConfig, type KbConfig } from "./config";
 import { openDb, indexNotes } from "./db";
 import type { Embedder, EmbedProfile } from "./embed";
-import { VectorStore, embedNotes } from "./vector";
+import { VectorStore, computeSimilar, embedNotes } from "./vector";
+import { loadSimilar, similarNotes } from "./db";
+import { existsSync, readFileSync } from "node:fs";
 import { search, rrf, cutoff, confidence, buildWhere, snippet, THIN_WEIGHT, VECTOR_CUTOFF, VECTOR_STRONG } from "./search";
 import type { ChunkRow } from "./vector";
 
@@ -82,6 +84,39 @@ describe("VectorStore + embedNotes", () => {
     store = await VectorStore.open(cfg);
     expect(store.ready).toBe(true);
     expect((await store.table!.listIndices()).some((i) => i.columns.includes("text"))).toBe(true);
+  });
+
+  test("similar notes: header-chunk neighbours written to similar.json, loaded into SQLite, served per note", async () => {
+    const db = openDb(cfg);
+    indexNotes(cfg, db);
+    const store = await VectorStore.open(cfg);
+    // the fake embedder is a character histogram: every note is near every other, so the cutoff is wide open here
+    const pairs = await computeSimilar(store, { k: 2, maxDistance: 2 });
+    const byNote = new Map<string, string[]>();
+    for (const [p, o] of pairs) byNote.set(p, [...(byNote.get(p) ?? []), o]);
+    expect([...byNote.keys()].sort()).toEqual(["200_silver/204_books/ラーメン本.md", "200_silver/204_books/十角館の殺人.md", "200_silver/204_books/積読.md"]);
+    for (const [p, others] of byNote) { expect(others).not.toContain(p); expect(others.length).toBeLessThanOrEqual(2); }
+    // scores are 1 - distance, sorted best first within a note
+    const ramen = pairs.filter((x) => x[0] === "200_silver/204_books/ラーメン本.md").map((x) => x[2]);
+    expect(ramen).toEqual([...ramen].sort((a, b) => b - a));
+    // embedNotes wrote the file after the last change; nothing to embed now, but the file exists so it is kept
+    expect(existsSync(cfg.similarPath)).toBe(true);
+    const file = JSON.parse(readFileSync(cfg.similarPath, "utf8")) as { model: string; chunker: number; k: number; pairs: unknown[] };
+    expect(file.model).toBe("fake");
+    expect(file.k).toBe(5);
+    // the tight default cutoff may leave the file empty with the fake vectors: load the wide pairs instead
+    const { writeSimilar } = await import("./vector");
+    writeSimilar(cfg, { model: "fake", chunker: 2, updatedAt: "2026-10-13", k: 2, pairs });
+    expect(loadSimilar(cfg, db)).toBe(true);
+    expect(loadSimilar(cfg, db)).toBe(false); // unchanged file: not reloaded
+    const sim = similarNotes(db, "200_silver/204_books/ラーメン本.md");
+    expect(sim.map((s) => s.path)).toEqual(byNote.get("200_silver/204_books/ラーメン本.md") ?? []);
+    expect(sim[0]!.title).toBeTruthy();
+    expect(sim[0]!.score).toBeGreaterThan(0);
+    // a neighbour that left the index is not served
+    db.run("DELETE FROM notes WHERE path=?", [sim[0]!.path]);
+    expect(similarNotes(db, "200_silver/204_books/ラーメン本.md").map((s) => s.path)).not.toContain(sim[0]!.path);
+    indexNotes(cfg, db, { full: true }); // the index file is shared with the tests below
   });
 
   test("keyword (BM25 via ICU tokens), vector, hybrid, filters, spoilers", async () => {

@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { GOLD_PREFIX, SILVER_PREFIX, type KbConfig } from "./config";
+import { GOLD, GOLD_PREFIX, SILVER_PREFIX, type KbConfig } from "./config";
 import { readNote, toRel, walkNotes, type Note } from "./notes";
 
 export interface NoteRow {
@@ -35,6 +35,7 @@ CREATE INDEX IF NOT EXISTS notes_type ON notes(type);
 CREATE TABLE IF NOT EXISTS links (src TEXT, dst TEXT, PRIMARY KEY(src, dst));
 CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(path UNINDEXED, title, summary, tags, body, tokenize='trigram');
 CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);
+CREATE TABLE IF NOT EXISTS similar (path TEXT NOT NULL, other TEXT NOT NULL, score REAL NOT NULL, PRIMARY KEY(path, other));
 `;
 
 export function openDb(cfg: KbConfig): Database {
@@ -99,7 +100,41 @@ export function indexNotes(cfg: KbConfig, db: Database, opts: { full?: boolean; 
     db.run("INSERT OR REPLACE INTO meta(k,v) VALUES('indexed_at',?)", [new Date().toISOString()]);
   });
   tx(scope.notes);
+  loadSimilar(cfg, db);
   return { added, updated, removed };
+}
+
+/** `900_system/similar.json`: nearest notes per note, written by `kb embed` (vector.ts) and committed with the data repo. */
+export interface SimilarFile { model: string; chunker: number; updatedAt: string; k: number; pairs: [string, string, number][] }
+
+/**
+ * Load `900_system/similar.json` into the `similar` table when the file changed since the last load (mtime + size in
+ * `meta`). Runs on every indexNotes, so the API pod (which never embeds) picks the pairs up from git with its next sync.
+ */
+export function loadSimilar(cfg: KbConfig, db: Database): boolean {
+  const p = cfg.similarPath;
+  if (!existsSync(p)) return false;
+  const st = statSync(p);
+  const stamp = `${st.mtimeMs}:${st.size}`;
+  const prev = (db.query("SELECT v FROM meta WHERE k='similar_loaded'").get() as { v: string } | null)?.v;
+  if (prev === stamp) return false;
+  let file: SimilarFile;
+  try { file = JSON.parse(readFileSync(p, "utf8")) as SimilarFile; } catch { return false; }
+  if (!Array.isArray(file.pairs)) return false;
+  const ins = db.prepare("INSERT OR REPLACE INTO similar(path,other,score) VALUES(?,?,?)");
+  db.transaction(() => {
+    db.run("DELETE FROM similar");
+    for (const [path, other, score] of file.pairs) ins.run(path, other, score);
+    db.run("INSERT OR REPLACE INTO meta(k,v) VALUES('similar_loaded',?)", [stamp]);
+  })();
+  return true;
+}
+
+export interface SimilarNote { path: string; type: string; title: string; status: string; summary: string; score: number }
+/** Nearest notes of `path` (best first) that are still in the index, from `similar` joined with `notes`. */
+export function similarNotes(db: Database, path: string, limit = 5): SimilarNote[] {
+  return db.query(`SELECT n.path, n.type, n.title, n.status, n.summary, s.score FROM similar s JOIN notes n ON n.path = s.other
+    WHERE s.path = ? AND n.archived = 0 AND n.path LIKE ? ORDER BY s.score DESC, n.path LIMIT ?`).all(path, `${SILVER_PREFIX}%`, limit) as SimilarNote[];
 }
 
 /** Notes at or below the given repo-relative paths (Silver/Gold only), and which index rows those paths cover. */
@@ -130,7 +165,11 @@ function notesUnder(cfg: KbConfig, paths: string[]): { notes: Note[]; covers: (p
   return { notes, covers: (p) => files.has(p) || dirs.some((d) => p.startsWith(`${d}/`)) };
 }
 
-/** [gold path, silver path] for every markdown link from a Gold file into Silver (Gold has no frontmatter, so it is not a Note). */
+/**
+ * [gold path, silver path] for every markdown link from a Gold file into Silver (Gold has no frontmatter, so it is not a Note).
+ * 393 (resurface) is skipped: its random picks and review reminders rotate daily and list orphans on purpose, so they must
+ * not count as backlinks (an orphan would stop being one for a day).
+ */
 export function goldLinks(cfg: KbConfig): [string, string][] {
   const out: [string, string][] = [];
   const walk = (dir: string) => {
@@ -140,6 +179,7 @@ export function goldLinks(cfg: KbConfig): [string, string][] {
       if (ent.isDirectory()) walk(abs);
       else if (ent.name.endsWith(".md")) {
         const src = toRel(cfg, abs);
+        if (src === `${GOLD_PREFIX}${GOLD.resurface}`) continue;
         for (const dst of extractLinks({ path: src, body: readFileSync(abs, "utf8"), fm: {} })) if (dst.startsWith(SILVER_PREFIX)) out.push([src, dst]);
       }
     }

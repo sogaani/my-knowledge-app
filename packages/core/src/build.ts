@@ -8,6 +8,7 @@ import { buildCrossViews } from "./views";
 import { currencyOf, formatMoney, formatTotals, monthlyByCurrency } from "./money";
 import { RECOMMENDATION_TYPE, currentRecommendation, parseSuggestions, readSuggestionBody, suggestionCounts } from "./suggest";
 import { IMPORTED_SUMMARY, bookDate, bookYear, unratedImported } from "./books";
+import { renderResurface, renderResurfaceHome, resurface } from "./resurface";
 
 /** Regenerate every Gold markdown file from the index. Gold is derived; never hand-edited. */
 export function buildGold(cfg: KbConfig, db: Database): string[] {
@@ -195,6 +196,9 @@ export function buildGold(cfg: KbConfig, db: Database): string[] {
 
   // 390 / 391 / 392: views across domains (views.ts)
   buildCrossViews(cfg, db, out, { daily: GOLD.daily, trends: GOLD.trends, upcoming: GOLD.upcoming });
+  // 393: what to look at again today (resurface.ts). Plaintext, so encrypted domains are counted, not named.
+  const again = resurface(db, today());
+  out(GOLD.resurface, renderResurface(again));
 
   // 300 home
   const reviews = q("type=review", { orderBy: "-updated", limit: 5 });
@@ -221,6 +225,7 @@ export function buildGold(cfg: KbConfig, db: Database): string[] {
     `- [市場メモ](${GOLD.market}) — 銘柄・テーマ・カタリスト`,
     `- [健康記録](${GOLD.health})`,
     `- [滞在記録](${GOLD.location})`, "",
+    ...renderResurfaceHome(again, GOLD.resurface), "",
     "## 最近のレビュー", ...list(reviews), "",
     "## 最近更新したノート", "", "| 更新 | type | ノート | 要約 |", "|---|---|---|---|",
     ...recent.map((n) => `| ${n.updated} | ${n.type} | ${link(n)} | ${n.summary} |`),

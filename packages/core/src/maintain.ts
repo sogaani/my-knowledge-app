@@ -8,6 +8,7 @@ import type { SchemaRegistry } from "./schema";
 import { listInbox, mailCategory, processState, readMeta, rewriteProcessedTo, walkBronze, type ProcessState } from "./bronze";
 import { SUGGESTION_SOURCE_PREFIX, relLink, suggestionIds } from "./suggest";
 import { MONTHLY_TYPES, isBareMonthTitle, monthlyTitle } from "./create";
+import { STALE_DAYS, isStale } from "./resurface";
 
 export interface Issue { level: "error" | "warn"; path: string; msg: string }
 
@@ -170,6 +171,7 @@ export interface BronzeSummary { kind: string; category?: string; total: number;
 
 export function lint(cfg: KbConfig, db: Database, opts: { staleDays?: number } = {}): LintReport {
   const now = Date.now();
+  const todayStr = today();
   const days = (iso: string) => (now - new Date(iso).getTime()) / 86400000;
   const inboxStale = listInbox(cfg).filter((f) => days(statSync(f).mtime.toISOString()) > 3).map((f) => basename(f));
   // inbound links from Silver notes and from Gold (`kb build` lists every book / ledger / log in its views; a note on a
@@ -188,7 +190,7 @@ export function lint(cfg: KbConfig, db: Database, opts: { staleDays?: number } =
       if (field) redundantTags.push(`${r.path}: ${t} (= ${field})`);
     }
     if (!linked.has(r.path) && !ORPHAN_EXEMPT.has(r.type)) orphans.push(r.path);
-    if (["project", "learning"].includes(r.type) && r.status === "active" && r.updated && days(r.updated) > (opts.staleDays ?? 30)) stale.push(r.path);
+    if (isStale(r, todayStr, opts.staleDays ?? STALE_DAYS)) stale.push(r.path); // the same rule feeds 393_resurface
     if (r.type === "subscription" && r.status === "active" && fm.next_renewal && days(String(fm.next_renewal)) > -14) renewals.push(`${r.path} (${fm.next_renewal})`);
     if (["done", "cancelled", "closed", "merged"].includes(r.status)) archiveCandidates.push(r.path);
   }

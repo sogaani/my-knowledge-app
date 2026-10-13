@@ -3,7 +3,7 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { PencilIcon } from "lucide-react";
 import { api, type NoteDetail, type TypeDef } from "@/api";
 import Md, { routeFor } from "@/components/Md";
-import { Chip, Choice, Err, Loading, Toolbar } from "@/components/common";
+import { Chip, Choice, Err, Loading, Toolbar, Viewed } from "@/components/common";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -86,7 +86,7 @@ export default function Note() {
           {fields.filter((k) => n.fm[k] !== undefined && n.fm[k] !== "").map((k) => <FieldRow key={k} k={k} v={n.fm[k]} />)}
           <Label className="text-muted-foreground">sources</Label><span className="text-muted-foreground">{(n.fm.sources as string[] | undefined)?.join(", ") || "—"}</span>
           <Label className="text-muted-foreground">updated</Label>
-          <span className="flex items-center gap-3 text-muted-foreground">{String(n.fm.updated ?? "")} <Button variant="outline" size="sm" onClick={startEdit}><PencilIcon data-icon="inline-start" />編集</Button></span>
+          <span className="flex items-center gap-3 text-muted-foreground">{String(n.fm.updated ?? "")} <Viewed at={n.viewed} />{n.views ? <span className="text-xs text-muted-foreground">（{n.views} 回）</span> : null} <Button variant="outline" size="sm" onClick={startEdit}><PencilIcon data-icon="inline-start" />編集</Button></span>
         </div>
       )}
       <Md text={n.body} basePath={n.path} />
@@ -97,6 +97,12 @@ export default function Note() {
           <Button type="submit" variant="outline" loading={append.pending} disabled={!line.trim()}>追記</Button>
         </Toolbar>
       </form>
+      {n.similar.length > 0 && (
+        <div className="mt-4 text-sm">
+          <span className="text-muted-foreground">似たノート: </span>
+          {n.similar.map((s) => <span key={s.path} className="mr-3 inline-flex items-center gap-1"><Link to={routeFor(s.path)} title={s.summary}>{s.title}</Link><Chip>{typeLabel(s.type)}</Chip></span>)}
+        </div>
+      )}
       {(n.backlinks.length > 0 || n.links.length > 0) && (
         <p className="text-sm text-muted-foreground">
           {n.links.length > 0 && <>リンク先: {n.links.map((l) => <Link key={l} to={routeFor(l)}>{l.split("/").pop()}</Link>).reduce<React.ReactNode[]>((a, x, i) => (i ? [...a, " · ", x] : [x]), [])}<br /></>}

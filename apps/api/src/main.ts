@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import {
   runQuery, parseFilters, readNote, patchFrontmatter, createNote, DuplicateError, extractLinks, currentRecommendation, reactToSuggestion,
-  keywordSearch, monthlyByCurrency, errorHead, LAYOUT, SILVER_PREFIX, GOLD_PREFIX, type SearchResponse, type SearchMode, type Reaction,
+  keywordSearch, monthlyByCurrency, errorHead, similarNotes, resurface, LAYOUT, SILVER_PREFIX, GOLD_PREFIX, type SearchResponse, type SearchMode, type Reaction,
 } from "@kb/core";
 import { env } from "./env";
 import { authenticate, requireUser, requireWorker, requireInboxWriter, requireUserOrWorker, type Principal } from "./auth";
@@ -12,7 +12,7 @@ import { cfg, reg, db, sync, head, rebuildGold, commitKb, cachedLint, pushState,
 import {
   createJob, getJob, listJobs, claimNextJob, claimQueuedJobs, appendJobLog, touchJob, finishJob, requeueStale, pruneSearchJobs, waitJobEvent,
   addInboxItem, inboxItemNameExists, inboxItemsForJob, getInboxItem, markInboxFetched, addChat, listChat, newId, type JobKind,
-  addPushSubscription, deletePushSubscription, listPushSubscriptions,
+  addPushSubscription, deletePushSubscription, listPushSubscriptions, recordView, lastViewed, viewCount,
 } from "./store";
 import { pushEnabled, sendPushToAll, type PushPayload } from "./push";
 
@@ -48,6 +48,14 @@ const safePath = (p: string) => {
 // ---- user routes ----
 api.get("/me", (c) => c.json({ principal: c.get("principal"), kbRoot: cfg.root }));
 
+/** Attach the last view (from the `views` table) to note rows. */
+function withViewed<T extends { path: string }>(rows: T[]): (T & { viewed: string | null })[] {
+  const seen = lastViewed(rows.map((r) => r.path));
+  return rows.map((r) => ({ ...r, viewed: seen.get(r.path) ?? null }));
+}
+/** Calendar date in JST (the pod runs in UTC; the person reading the home page does not). */
+const todayJst = () => new Date(Date.now() + 9 * 3600_000).toISOString().slice(0, 10);
+
 api.get("/home", requireUser, async (c) => {
   const counts = db.query("SELECT type, COUNT(*) c FROM notes WHERE archived=0 AND path LIKE ? GROUP BY type").all(`${SILVER_PREFIX}%`) as { type: string; c: number }[];
   const subs = runQuery(db, { filters: [{ field: "type", op: "=", value: "subscription" }, { field: "status", op: "=", value: "active" }], limit: 1000 });
@@ -56,9 +64,12 @@ api.get("/home", requireUser, async (c) => {
   const books = runQuery(db, { filters: [{ field: "type", op: "=", value: "book" }], limit: 5000 });
   const media = runQuery(db, { filters: [{ field: "type", op: "=", value: "media" }], limit: 5000 });
   const byStatus = (xs: typeof books) => xs.reduce<Record<string, number>>((a, x) => ((a[x.status] = (a[x.status] ?? 0) + 1), a), {});
+  // the same list as Gold 393, but this page is behind Access: encrypted-domain notes are named, with their last view
+  const again = resurface(db, todayJst());
   return c.json({
     counts, monthlySubscriptions: monthlyByCurrency(subs), activeSubscriptions: subs.length,
-    books: byStatus(books), media: byStatus(media), projects, recent, jobs: listJobs(8),
+    books: byStatus(books), media: byStatus(media), projects, recent: withViewed(recent), jobs: listJobs(8),
+    resurface: { date: again.date, due: withViewed(again.due), onThisDay: withViewed(again.onThisDay), random: withViewed(again.random) },
     lint: await timed(c, "lint", cachedLint), head: head(), unpushed: unsavedCount(), pushError: pushState.error,
   });
 });
@@ -71,7 +82,7 @@ api.get("/notes", requireUser, (c) => {
   if (q.type) filters.push({ field: "type", op: "=", value: q.type });
   if (q.status) filters.push({ field: "status", op: "=", value: q.status });
   const res = runQuery(db, { filters, text: q.text || undefined, includeArchive: q.archive === "1", limit: Number(q.limit ?? 200), orderBy: q.order || undefined });
-  return c.json(res.filter((n) => n.path.startsWith(SILVER_PREFIX)));
+  return c.json(withViewed(res.filter((n) => n.path.startsWith(SILVER_PREFIX))));
 });
 
 /**
@@ -125,19 +136,27 @@ function noteDetail(rel: string) {
       if (existsSync(p)) attachments[f] = readFileSync(p, "utf8");
     }
   }
-  return { path: note.path, type: note.type, title: note.title, fm: note.fm, body: note.body, archived: note.archived, links: extractLinks(note), backlinks, attachments };
+  // similar: nearest notes by embedding (900_system/similar.json → SQLite `similar`; see docs/search.md)
+  return { path: note.path, type: note.type, title: note.title, fm: note.fm, body: note.body, archived: note.archived, links: extractLinks(note), backlinks, attachments, similar: similarNotes(db, note.path) };
+}
+/** Showing the page counts as a view: the previous one is reported (`viewed`) and this one recorded. */
+function viewed(d: NonNullable<ReturnType<typeof noteDetail>>) {
+  const last = lastViewed([d.path]).get(d.path) ?? null;
+  const views = viewCount(d.path);
+  recordView(d.path);
+  return { ...d, viewed: last, views };
 }
 api.get("/notes/*", requireUser, (c) => {
   const rel = safePath(c.req.path.replace(/^\/api\/notes\//, ""));
   if (!rel) return c.json({ error: "bad path" }, 400);
   if (!existsSync(join(cfg.root, rel))) return c.json({ error: "not found" }, 404);
   const d = noteDetail(rel);
-  if (d) return c.json(d);
+  if (d) return c.json(viewed(d));
   // log.md / tasks.md of a folder entity have no frontmatter: answer with the entity, which shows them as attachments
   const readme = rel.replace(/[^/]+$/, "README.md");
   const parent = readme !== rel && existsSync(join(cfg.root, readme)) ? noteDetail(readme) : null;
   const name = basename(rel);
-  if (parent && name in parent.attachments) return c.json({ ...parent, attachment: name });
+  if (parent && name in parent.attachments) return c.json({ ...viewed(parent), attachment: name });
   return c.json({ error: "not a note" }, 400);
 });
 

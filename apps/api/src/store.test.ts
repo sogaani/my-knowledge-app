@@ -89,3 +89,21 @@ describe("claimQueuedJobs", () => {
     for (const id of ids) s.finishJob(id, true, null);
   });
 });
+
+describe("views", () => {
+  test("records each page view and answers the last one per path", () => {
+    const a = "200_silver/204_books/a.md", b = "200_silver/204_books/b.md";
+    expect(s.lastViewed([a, b]).size).toBe(0);
+    expect(s.viewCount(a)).toBe(0);
+    s.recordView(a);
+    s.store.run("UPDATE views SET viewed_at=? WHERE path=?", ["2026-10-01T00:00:00.000Z", a]);
+    s.recordView(a);
+    s.recordView(b);
+    const seen = s.lastViewed([a, b, "200_silver/204_books/never.md"]);
+    expect(seen.size).toBe(2);
+    expect(seen.get(a)! > "2026-10-01T00:00:00.000Z").toBe(true);
+    expect(seen.get(b)).toBeTruthy();
+    expect(s.viewCount(a)).toBe(2);
+    expect(s.lastViewed([]).size).toBe(0);
+  });
+});

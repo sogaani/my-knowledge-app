@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { lastBackupAt } from "./backup";
 import { loadConfig } from "./config";
 import { buildOpsDigest, clipError, countInbox, countNoteChanges, errorHead, extractJudgements, formatOpsDigest, renderOpsDigest, summarizeCollect } from "./ops";
+import { indexNotes, openDb } from "./db";
 
 const CF_502 = `<!DOCTYPE html><html><head><title>kb.example | 502: Bad gateway</title><style>body{margin:0}</style>
 <script>window.x=1</script></head><body><div id="cf-wrapper"><h1><span class="cf-error-type">Error</span><span>502</span></h1>
@@ -128,6 +129,27 @@ describe("buildOpsDigest / format", () => {
     expect(text).toContain("youtube: HTTP 403 quota");
     expect(text).toContain("inbox: feed 1 / mail 2 / その他 0");
     expect(text).toContain("- 二重計上の可能性");
+  });
+
+  test("with the index: the '今日見直すノート' line counts Gold 393's due list (plaintext titles only in the text)", () => {
+    const root = fixtureRoot();
+    const w = (rel: string, fm: Record<string, unknown>) => { mkdirSync(join(root, rel, ".."), { recursive: true }); writeFileSync(join(root, rel), `---\n${Object.entries(fm).map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join("\n")}\n---\n本文\n`); };
+    const base = { status: "active", created: "2026-01-05", updated: "2026-10-10", summary: "" };
+    w("200_silver/200_market/銘柄A.md", { ...base, type: "stock", title: "銘柄A", status: "watch", review_due: "2026-10-01" });
+    w("200_silver/203_finance/テスト口座.md", { ...base, type: "finance_account", title: "テスト口座", review_due: "2026-10-01" });
+    w("200_silver/204_books/去年.md", { ...base, type: "book", title: "去年", status: "read", created: "2025-10-14" });
+    process.env.KB_DB = join(root, "kb.sqlite");
+    const cfg = loadConfig(root);
+    delete process.env.KB_DB;
+    const db = openDb(cfg);
+    indexNotes(cfg, db);
+    const d = buildOpsDigest(cfg, { now: new Date(2026, 9, 14, 7, 5), inboxNames: [], agentOutput: "", agentOk: true, changes: [], db });
+    expect(d.review).toEqual({ due: 2, onThisDay: 1, top: [expect.objectContaining({ title: "銘柄A" })] });
+    expect(formatOpsDigest(d).body.split("\n")[2]).toBe("今日見直すノート 2 件 · 同じ月日の過去ノート 1 件");
+    const text = renderOpsDigest(d);
+    expect(text).toContain("今日見直すノート 2 件");
+    expect(text).toContain("  銘柄A: 見直し期限 2026-10-01（13 日超過）");
+    expect(text).not.toContain("テスト口座");
   });
 
   test("no backup log, no state, failed agent", () => {

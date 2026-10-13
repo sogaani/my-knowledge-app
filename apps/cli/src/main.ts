@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { join } from "node:path";
 import {
-  loadConfig, openDb, indexNotes, SchemaRegistry, createNote, DuplicateError, patchFrontmatter, appendToSection,
+  loadConfig, openDb, indexNotes, loadSimilar, SchemaRegistry, createNote, DuplicateError, patchFrontmatter, appendToSection,
   ingestFile, ingestUrl, sourceExcerpt, markProcessed, listInbox, parseFilters, runQuery, buildGold,
   validateAll, archiveNote, lint, backupBronze, pruneBronze, logAccess, importPortfolio, importHealth, importLocation, importCalendar, importKoboLibrary, runCollectors, type BronzeKind,
   search, VectorStore, embedNotes, makeEmbedder, setupLindera, linderaStatus, resolveTokenizer, readVectorMeta, type SearchMode,
@@ -43,13 +43,14 @@ const cfg = loadConfig();
 const reg = new SchemaRegistry(cfg);
 const db = () => { const d = openDb(cfg); indexNotes(cfg, d); return d; };
 const warn = (m: string) => console.error(m);
-/** Refresh the LanceDB index after the SQLite one. Never fatal: Ollama may be down, next run catches up. */
-async function embedSoft(opts: { full?: boolean } = {}) {
+/** Refresh the LanceDB index after the SQLite one (and load the similar-notes pairs it wrote). Never fatal: Ollama may be down, next run catches up. */
+async function embedSoft(d: ReturnType<typeof openDb>, opts: { full?: boolean } = {}) {
   if (!cfg.embedding.enabled) return;
   try {
     const store = await VectorStore.open(cfg);
     const s = await embedNotes(cfg, store, makeEmbedder(cfg), { ...opts, log: (m) => warn(`embed: ${m}`) });
     if (s.embedded || s.removed) warn(`embed: +${s.embedded} -${s.removed} (${s.rows} chunks, ${s.tokenizer})`);
+    loadSimilar(cfg, d);
   } catch (e) {
     warn(`embed: skipped (${(e as Error).message})`);
   }
@@ -147,7 +148,7 @@ switch (cmd) {
   case "index": {
     const d = openDb(cfg);
     const r = indexNotes(cfg, d, { full: argv.includes("--full") });
-    await embedSoft({ full: argv.includes("--full") });
+    await embedSoft(d, { full: argv.includes("--full") });
     json(r);
     break;
   }
@@ -155,7 +156,7 @@ switch (cmd) {
     const d = db();
     const files = buildGold(cfg, d);
     indexNotes(cfg, d);
-    await embedSoft();
+    await embedSoft(d);
     console.log(files.join("\n"));
     break;
   }
@@ -216,6 +217,7 @@ switch (cmd) {
     const d = openDb(cfg);
     indexNotes(cfg, d);
     const s = await embedNotes(cfg, store, makeEmbedder(cfg), { full: !!f.full, log: (m) => warn(`embed: ${m}`) });
+    loadSimilar(cfg, d);
     json(s);
     break;
   }

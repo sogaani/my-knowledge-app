@@ -6,7 +6,7 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import {
-  LAYOUT, SILVER_PREFIX, loadConfig, git, gitCommitPush, gitStatusPaths, hasUpstream, openDb, indexNotes, parseFilters, search, makeEmbedder, listInbox,
+  LAYOUT, SILVER_PREFIX, SIMILAR_REL, loadConfig, git, gitCommitPush, gitStatusPaths, hasUpstream, openDb, indexNotes, parseFilters, search, makeEmbedder, listInbox,
   clipError, errorHead, buildOpsDigest, formatOpsDigest, renderOpsDigest, type SearchMode,
 } from "@kb/core";
 import { planIngest, ingestCommitMessage, ingestDoneBodies, ingestFailureBodies, type IngestOutcome } from "./ingest-batch";
@@ -57,8 +57,10 @@ async function kb(...args: string[]): Promise<string> {
   return o;
 }
 
+/** Silver, Gold and the similar-notes pairs `kb build` (→ embed) rewrote: the API pod reads them from git. */
 async function commitAll(message: string): Promise<string | null> {
-  return gitCommitPush(cfg.root, [LAYOUT.silver, LAYOUT.gold], message, { author: "kb-worker <kb-worker@local>" });
+  const paths = [LAYOUT.silver, LAYOUT.gold, ...(existsSync(join(cfg.root, SIMILAR_REL)) ? [SIMILAR_REL] : [])];
+  return gitCommitPush(cfg.root, paths, message, { author: "kb-worker <kb-worker@local>" });
 }
 
 async function stageInbox(job: Job) {
@@ -148,7 +150,9 @@ async function runIngest(jobs: Job[]) {
     // One digest per scheduled morning run, whatever the batch size: what was waiting before the agent ate it.
     if (plan.scheduled) {
       try {
-        const digest = buildOpsDigest(cfg, { inboxNames: plan.inboxNames, agentOutput: outcome.agentOutput ?? "", agentOk: outcome.ok, changes });
+        searchDb ??= openDb(cfg);
+        indexNotes(cfg, searchDb);
+        const digest = buildOpsDigest(cfg, { inboxNames: plan.inboxNames, agentOutput: outcome.agentOutput ?? "", agentOk: outcome.ok, changes, db: searchDb });
         outcome.digest = { text: renderOpsDigest(digest), notify: formatOpsDigest(digest) };
       } catch (e) {
         warn(`${tag} digest: ${(e as Error).message}`);

@@ -7,7 +7,7 @@ launchd daily-collect（毎朝 06:30）
   └─ bun run collect                     apps/collector（.env に秘密。Mac だけ）
        └─ runCollectors()                packages/core/src/collect/run.ts
             ├─ Promise.allSettled で各 Collector を並行実行（1 つ失敗しても他は続ける）
-            │    gmail / github / calendar / youtube / health / linkedin
+            │    gmail / gmail-review / github / calendar / youtube / health / linkedin
             ├─ HTTP は http.ts（429・5xx・レート制限の 403（GitHub の X-RateLimit、Google の rateLimitExceeded / RATE_LIMIT_EXCEEDED）だけ再試行。Retry-After / X-RateLimit-Reset を尊重、
             │   それ以外は指数バックオフ + full jitter：基準 1 秒・上限 60 秒・最大 5 回）
             ├─ 000_inbox/collect-<source>-<from>_<to>.json（フィード）/ mail-YYYYMMDD-<category>-<id>.json（Gmail）
@@ -18,6 +18,7 @@ launchd daily-ingest（07:00）→ enqueue.sh → POST /api/jobs（ingest, sched
   └─ ingest スキル（1 回）
        ├─ kb ingest：collect-*.json → kind feed、mail-*.json → kind mail
        ├─ kb source <id>：生 JSON ではなく 1 件 1 行の要約（collect/digest.ts）。--full で生 JSON
+       ├─ mail-* は先に kb mail import --all（定常通知を自動で processed -、残りを台帳候補にして台帳と突合。下の「メールの前処理」）
        └─ collect-health-* は kb health import（月次 health_log を機械的に生成。エージェントは数値を写さない）
 ```
 
@@ -38,6 +39,7 @@ ingest は「WebUI の投げ込み 1 件 = 1 ジョブ」で、同じ時間帯�
 | id | 取得するもの | 認証 | 期間 |
 |---|---|---|---|
 | `gmail` | Apps Script が `KB/*` ラベルを付け、まだ `KB/取込済` が無いメール。取得後に `KB/取込済` を付ける | Google OAuth（`gmail.modify`） | ラベル基準 |
+| `gmail-review` | Apps Script が決めきれず `システム/要確認` を付けたメールの週次ダイジェスト（日付・差出人・件名だけ。本文は取らず、ラベルも変えない）。前回から 7 日経った朝だけ `collect-gmail-review-<from>_<to>.json` を書き、それまでは窓を開けたまま何も書かない。KB に入れるものは Gmail で `KB/*` を手で付ける（次の `gmail` で取得される）。`GMAIL_REVIEW=off`（`GMAIL=off` でも止まる） | Google OAuth（`gmail` と同じトークン） | 前回のダイジェスト〜今（7 日以上） |
 | `github` | 自分が作った Issue / PR、自分のコミット（検索 API） | fine-grained PAT（読み取り専用） | 前回の終わり〜今 |
 | `calendar` | 表示中のカレンダー（または `GOOGLE_CALENDAR_IDS`）の予定。キャンセル・辞退は除く。①実績: 前回の終わり〜今に行われた予定 ②将来: 今〜2 年後（`GOOGLE_CALENDAR_HORIZON_DAYS` で変更可）を毎回取得し、前回から新規・変更・削除になった予定だけを出す（繰り返しはシリーズで 1 件） | Google OAuth | ①前回の終わり〜今 ②今〜2 年後の差分 |
 | `youtube` | 高評価した動画（前回からの差分）と `YOUTUBE_PLAYLIST_IDS` の再生リスト | Google OAuth | 差分（カーソルに既知 ID） |
@@ -45,6 +47,16 @@ ingest は「WebUI の投げ込み 1 件 = 1 ジョブ」で、同じ時間帯�
 | `linkedin` | inbox に置かれた `*LinkedInDataExport*.zip` のプロフィール・職歴・新しいつながり・新しいメッセージ | なし（ZIP を手で置く） | 前回のエクスポートとの差分 |
 
 LinkedIn は自分のつながりやメッセージを返す API が EU/EEA 以外に公開されていないため、設定の「データのコピーをダウンロード」を使う。プロフィールの住所・生年月日などはフィードに写さない（ZIP 自体は Bronze に残る）。
+
+## メールの前処理（`kb mail import`）
+
+Gmail は最多のソース（3 日で 185 件、うち purchase と finance が 164 件）で、「ログイン通知は定常」「Moneytree の行と同じ取引か」という同じ判断を毎回 LLM にさせていた。`kb mail import <bronze-id>... | --all [--dry-run] [--json]`（`packages/core/src/mail.ts`）がその決定的な部分を引き受け、ingest スキルは候補の採否だけ判断する。
+
+1. **定常通知**: データリポジトリの `900_system/mail-rules.json`（`routine` 配列。`subject` / `from` は正規表現、`unless` は件名の除外、`unless_amount: true` は金額が読めるメールには当てない、`categories` でファイル名のカテゴリに限定）に当たったメールは `processed_to: ["-"]` にする。ルールは「ログイン」「認証」「発送」などの一般語だけで、本文・金額・口座名は書かない。
+2. **台帳候補**: 残りの purchase / finance / subscription / book / media から金額（合計・お支払い金額などの行を優先、HTML 表が崩れた「見出し行の次の行の数字」も拾う）、取引日（利用日・注文日の行、無ければメールの日付）、店名（件名の【…】か差出人名）、品目（`商品名:` などの行）を取り出す。金額が読めないものと `work` などは `manual`（`kb source` で読む）。
+3. **台帳との突合**: 203_finance の `ledger` ノート全部の `## 明細` を読み、同額かつ日付 ±1 日の行があれば `matched`（Moneytree 由来の行を優先して示す）、この Bronze ID を出典に持つ行があれば `recorded`、無ければ `unmatched`。Moneytree の行が届いている最終日（`moneytree rows through`）より後の `unmatched` は「まだ Moneytree が来ていないだけ」と表示する。
+
+出力は件数の行 + 1 件 1 行（ID・カテゴリ・日付・金額・店名・突合結果・件名）。本文は出さない。`--all` は Bronze の未処理 mail 全部、ID 指定で処理済みのものは `skipped` に理由付きで出る。Silver は書かない（台帳への追記はスキルが行う）。
 
 ## 初回設定
 

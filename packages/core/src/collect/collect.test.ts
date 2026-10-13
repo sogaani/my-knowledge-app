@@ -330,6 +330,65 @@ describe("sources against a fake API", () => {
     expect(steps).toEqual(["9/15-9/29", "9/29-10/12"]); // 27 days → 14 + 13
     expect(ymdOf(r.to!)).toBe("2026-10-12");
   });
+
+  test("gmail-review: weekly digest of システム/要確認 (headers only); not due → window stays open; label missing → fails", async () => {
+    const { gmailReview, reviewDue, REVIEW_LABEL } = require("./sources/gmail-review") as typeof import("./sources/gmail-review");
+    const { http, calls } = fakeHttp(({ url }) => {
+      if (url.endsWith("/labels")) return { labels: [{ id: "L9", name: REVIEW_LABEL }, { id: "L1", name: "KB/購入" }] };
+      if (/\/messages\?/.test(url)) return { messages: [{ id: "r2" }, { id: "r1" }] };
+      const id = /\/messages\/(\w+)\?/.exec(url)![1];
+      expect(url).toContain("format=metadata");
+      return { id, threadId: `t-${id}`, internalDate: String(Date.parse(id === "r1" ? "2026-10-06T01:00:00Z" : "2026-10-09T01:00:00Z")), payload: { headers: [{ name: "From", value: `shop-${id}@example.test` }, { name: "Subject", value: `件名 ${id}` }] } };
+    });
+    const env = { GOOGLE_REFRESH_TOKEN: "x" };
+    expect(gmailReview.configured(env)).toBe(true);
+    expect(gmailReview.configured({ ...env, GMAIL_REVIEW: "off" })).toBe("GMAIL_REVIEW=off");
+    expect(gmailReview.configured({ ...env, GMAIL: "off" })).toBe("GMAIL_REVIEW=off");
+
+    // first run: lookback = 7 days → due
+    const from = new Date(2026, 9, 5), to = new Date(2026, 9, 12, 6, 30);
+    expect(reviewDue(from, to)).toBe(true);
+    const r = await gmailReview.collect({ ...ctxBase, env, http, from, to });
+    const list = new URL(calls.find((c) => /\/messages\?/.test(c.url))!.url).searchParams;
+    expect(list.get("labelIds")).toBe("L9");
+    expect(list.get("q")).toBe(`after:${Math.floor(from.getTime() / 1000)} before:${Math.floor(to.getTime() / 1000)}`);
+    expect(r.items!.map((i) => gmailReview.digest(i))).toEqual(["2026-10-06 件名 r1 — shop-r1@example.test", "2026-10-09 件名 r2 — shop-r2@example.test"]);
+    expect(JSON.stringify(r.items)).not.toContain("body");
+    expect(r.meta).toMatchObject({ label: REVIEW_LABEL });
+
+    // the next morning: 1 day since lastTo → nothing fetched, window kept open (to = from)
+    calls.length = 0;
+    const next = await gmailReview.collect({ ...ctxBase, env, http, from: to, to: new Date(2026, 9, 13, 6, 30) });
+    expect(next.items).toBeUndefined();
+    expect(next.to).toBe(to);
+    expect(calls.length).toBe(0);
+    expect(reviewDue(to, new Date(2026, 9, 19, 6, 29))).toBe(true); // 7 calendar days later, launchd a minute early
+
+    const { http: noLabel } = fakeHttp(() => ({ labels: [{ id: "L1", name: "KB/購入" }] }));
+    await expect(gmailReview.collect({ ...ctxBase, env, http: noLabel, from, to })).rejects.toThrow(/システム\/要確認 not found/);
+  });
+
+  test("gmail-review through runCollectors: lastTo does not advance until the digest is due, then a feed is written", async () => {
+    const { gmailReview, REVIEW_LABEL } = require("./sources/gmail-review") as typeof import("./sources/gmail-review");
+    const root = mkdtempSync(join(tmpdir(), "kb-review-"));
+    const cfg = { root, inbox: join(root, "000_inbox"), cache: join(root, "900_system", "cache") } as unknown as KbConfig;
+    const { http } = fakeHttp(({ url }) => {
+      if (url.endsWith("/labels")) return { labels: [{ id: "L9", name: REVIEW_LABEL }] };
+      if (/\/messages\?/.test(url)) return { messages: [{ id: "r1" }] };
+      return { id: "r1", threadId: "t", internalDate: String(Date.parse("2026-10-14T01:00:00Z")), payload: { headers: [{ name: "Subject", value: "件名" }] } };
+    });
+    const env = { GOOGLE_CLIENT_ID: "c", GOOGLE_CLIENT_SECRET: "s", GOOGLE_REFRESH_TOKEN: "x" };
+    const log = { info() {}, warn() {} };
+    const d1 = await runCollectors(cfg, env, { now: new Date(2026, 9, 12, 6, 30), collectors: [gmailReview], log, http });
+    expect(d1[0]!.written).toEqual([feedName("gmail-review", "2026-10-05", "2026-10-12")]);
+    expect(loadState(cfg)["gmail-review"]!.lastTo).toBe(new Date(2026, 9, 12, 6, 30).toISOString());
+    const d2 = await runCollectors(cfg, env, { now: new Date(2026, 9, 13, 6, 30), collectors: [gmailReview], log, http });
+    expect(d2[0]).toMatchObject({ status: "ok", items: 0, written: [] });
+    expect(loadState(cfg)["gmail-review"]!.lastTo).toBe(new Date(2026, 9, 12, 6, 30).toISOString()); // unchanged
+    const d3 = await runCollectors(cfg, env, { now: new Date(2026, 9, 19, 6, 30), collectors: [gmailReview], log, http });
+    expect(d3[0]!.written).toEqual([feedName("gmail-review", "2026-10-12", "2026-10-19")]);
+    expect(digestJson(readFileSync(join(cfg.inbox, d3[0]!.written[0]!), "utf8"))).toContain("- 2026-10-14 件名 — ");
+  });
 });
 
 const ymdOf = (d: Date) => d.toLocaleDateString("sv-SE");

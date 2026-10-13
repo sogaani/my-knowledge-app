@@ -3,7 +3,7 @@ import { join } from "node:path";
 import {
   loadConfig, openDb, indexNotes, loadSimilar, SchemaRegistry, createNote, DuplicateError, patchFrontmatter, appendToSection,
   ingestFile, ingestUrl, sourceExcerpt, markProcessed, listInbox, parseFilters, runQuery, buildGold,
-  validateAll, archiveNote, lint, backupBronze, pruneBronze, logAccess, importPortfolio, importHealth, importLocation, importCalendar, importKoboLibrary, runCollectors, type BronzeKind,
+  validateAll, archiveNote, lint, backupBronze, pruneBronze, logAccess, importPortfolio, importHealth, importLocation, importCalendar, importKoboLibrary, importMail, formatMailImport, runCollectors, type BronzeKind,
   search, VectorStore, embedNotes, makeEmbedder, setupLindera, linderaStatus, resolveTokenizer, readVectorMeta, type SearchMode,
 } from "@kb/core";
 
@@ -279,6 +279,15 @@ switch (cmd) {
     console.log(`${r.created.length} created, ${r.skipped.length} already in 204_books (from ${r.bronzeId})`);
     break;
   }
+  case "mail": {
+    const { f, pos } = flags(argv);
+    const [sub, ...ids] = pos;
+    const all = !!(f.all || f["all-unprocessed"]);
+    if (sub !== "import" || (!ids.length && !all)) die("usage: kb mail import <bronze-id>... | --all [--dry-run] [--json]   (Gmail items: routine notices → processed -, the rest → ledger candidates matched against the ledger)");
+    const r = importMail(cfg, db(), { ids, all, dryRun: !!f["dry-run"] });
+    f.json ? json(r) : console.log(formatMailImport(r, { dryRun: !!f["dry-run"] }));
+    break;
+  }
   case "root": {
     console.log(cfg.root);
     break;
@@ -341,6 +350,7 @@ switch (cmd) {
   collect [source...] [--dry-run]    run collectors into 000_inbox (secrets: use \`bun run collect\` with apps/collector/.env)
   portfolio import <csv|bronze-id> [--account 楽天証券]   update the portfolio note from a 楽天証券 asset CSV (CP932 ok)
   book import <bronze-id> [--status want|read]   book notes (imported: true, purchased_at) from a 楽天Kobo library export CSV; existing titles are skipped
+  mail import <bronze-id>... | --all [--dry-run] [--json]   Gmail items: routine notices (900_system/mail-rules.json) → processed -; money mails → ledger candidates (amount / date / merchant) matched against the ledger
   query [type=book rating>=4] [--text "..."] [--include-archive] [--json] [--limit n] [--order -updated]
   search "<query>" [type=book ...] [--mode hybrid|vector|keyword] [--limit 10] [--include-archive] [--spoilers] [--json]
                                      semantic + keyword search (LanceDB; Ollama for vectors). ● high / ○ low confidence

@@ -8,4 +8,5 @@ export * from "./digest";
 export * from "./csv";
 export { healthMetrics, type HealthDay, type HealthMetrics } from "./sources/health";
 export { GMAIL_LABELS, FETCHED_LABEL } from "./sources/gmail";
+export { REVIEW_LABEL, REVIEW_PERIOD_DAYS, reviewDue, type ReviewItem } from "./sources/gmail-review";
 export { LINKEDIN_ZIP } from "./sources/linkedin";

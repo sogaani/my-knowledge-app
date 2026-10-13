@@ -37,20 +37,28 @@ const obj = <T>(v: unknown): Record<string, T> => (v && typeof v === "object" &&
 const link = (n: QueryResult, label = n.title) => `[${cell(label)}](../${n.path})`;
 const isDate = (v: unknown): v is string => typeof v === "string" && /^\d{4}-\d{2}-\d{2}/.test(v);
 
-/** Ledger 明細 rows: | 日付 | 内容 | 金額 | 区分 | 支払手段 | 出典 |. 収入 and 振替 are not spending. */
-export function ledgerSpending(body: string): { date: string; amount: number }[] {
-  const out: { date: string; amount: number }[] = [];
+/** One row of a ledger's 明細 table: | 日付 | 内容 | 金額 | 区分 | 支払手段 | 出典 |. */
+export interface LedgerRow { date: string; content: string; amount: number; category: string; method: string; source: string }
+
+/** Every dated row of the `## 明細` table (amount parsed; rows without a valid amount are dropped). */
+export function ledgerRows(body: string): LedgerRow[] {
+  const out: LedgerRow[] = [];
   const sec = /^## 明細\s*$/m.exec(body);
   if (!sec) return out;
   const end = body.indexOf("\n## ", sec.index + 1);
   for (const line of body.slice(sec.index, end === -1 ? undefined : end).split("\n")) {
     const c = line.split("|").map((x) => x.trim());
     if (c.length < 5 || !/^\d{4}-\d{2}-\d{2}$/.test(c[1]!)) continue;
-    if (/^(収入|振替)$/.test(c[4]!)) continue;
     const amount = Number(c[3]!.replace(/[^\d.-]/g, ""));
-    if (Number.isFinite(amount) && amount > 0) out.push({ date: c[1]!, amount });
+    if (!Number.isFinite(amount)) continue;
+    out.push({ date: c[1]!, content: c[2] ?? "", amount, category: c[4] ?? "", method: c[5] ?? "", source: c[6] ?? "" });
   }
   return out;
+}
+
+/** Ledger 明細 rows as spending: 収入 and 振替 are not spending. */
+export function ledgerSpending(body: string): { date: string; amount: number }[] {
+  return ledgerRows(body).filter((r) => !/^(収入|振替)$/.test(r.category) && r.amount > 0).map(({ date, amount }) => ({ date, amount }));
 }
 
 /** Dated entries of a project log.md: "## YYYY-MM-DD" headings with bullets, or "- YYYY-MM-DD: text" lines. */

@@ -26,4 +26,5 @@ export * from "./money";
 export * from "./ops";
 export * from "./suggest";
 export * from "./books";
+export * from "./mail";
 export * from "./resurface";

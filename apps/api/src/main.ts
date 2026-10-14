@@ -11,7 +11,7 @@ import { authenticate, requireUser, requireWorker, requireUserOrWorker, type Pri
 import { cfg, reg, db, sync, head, rebuildGold, commitKb, cachedLint, pushState, unsavedCount, isGitRepo } from "./kb";
 import {
   createJob, getJob, listJobs, claimNextJob, claimQueuedJobs, appendJobLog, touchJob, finishJob, requeueStale, pruneSearchJobs, waitJobEvent,
-  addInboxItem, inboxItemNameExists, inboxItemsForJob, getInboxItem, markInboxFetched, addChat, listChat, newId, type JobKind,
+  addInboxItem, inboxItemNameExists, inboxItemsForJob, getInboxItem, markInboxFetched, addChat, listExchanges, newId, type JobKind, type ChatMessage,
   addPushSubscription, deletePushSubscription, listPushSubscriptions, recordView, lastViewed, viewCount,
 } from "./store";
 import { askDonePush, pushEnabled, sendPushToAll, type PushPayload } from "./push";
@@ -303,12 +303,22 @@ api.post("/jobs", requireUserOrWorker, async (c) => {
   return c.json(createJob(b.kind, c.get("principal").kind === "worker" ? { ...payload, scheduled: true } : payload));
 });
 
-/** Each answer's `sources` (note paths from the ask skill) come back as `sourceNotes` with their titles, for the cards in the chat. */
+/**
+ * Exchanges newest first, `limit` (1-50) at a time; `before` = the oldest loaded question's `created_at` pages further back.
+ * `next` is the cursor for the following page, null when this page was short. Each answer's `sources` (note paths from the
+ * ask skill) come back as `sourceNotes` with their titles, for the cards in the chat. Only the returned answers are resolved.
+ */
 api.get("/chat", requireUser, (c) => {
-  const msgs = listChat();
+  const limit = Math.max(1, Math.min(50, Number(c.req.query("limit") ?? 10) || 10));
+  const before = c.req.query("before") || undefined;
+  const items = listExchanges(limit, before);
   const paths = (s: string): string[] => { try { const v = JSON.parse(s || "[]"); return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []; } catch { return []; } };
-  const heads = noteHeads(db, msgs.flatMap((m) => paths(m.sources)));
-  return c.json(msgs.map((m) => ({ ...m, sourceNotes: paths(m.sources).map((p) => heads.get(p) ?? { path: p, type: "", title: basename(p, ".md"), status: "", summary: "" }) })));
+  const heads = noteHeads(db, items.flatMap((x) => (x.answer ? paths(x.answer.sources) : [])));
+  const withNotes = (m: ChatMessage) => ({ ...m, sourceNotes: paths(m.sources).map((p) => heads.get(p) ?? { path: p, type: "", title: basename(p, ".md"), status: "", summary: "" }) });
+  return c.json({
+    items: items.map((x) => ({ ...x, answer: x.answer ? withNotes(x.answer) : null })),
+    next: items.length === limit ? items[items.length - 1]!.created_at : null,
+  });
 });
 api.post("/chat", requireUser, async (c) => {
   const { question } = (await c.req.json()) as { question: string };

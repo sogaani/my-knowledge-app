@@ -125,3 +125,46 @@ describe("views", () => {
     expect(s.lastViewed([]).size).toBe(0);
   });
 });
+
+describe("listExchanges", () => {
+  const backdateChat = (id: string, minutesAgo: number) =>
+    s.store.run("UPDATE chat_messages SET created_at=? WHERE id=?", [new Date(Date.now() - minutesAgo * MIN).toISOString(), id]);
+  test("pairs each question with its answer by job id, newest first, and pages back with `before`", () => {
+    s.store.run("DELETE FROM chat_messages");
+    const j1 = s.createJob("ask", { question: "q1" }), j2 = s.createJob("ask", { question: "q2" }), j3 = s.createJob("ask", { question: "q3" });
+    const q1 = s.addChat("user", "q1", j1.id); backdateChat(q1.id, 30);
+    const a1 = s.addChat("assistant", "a1", j1.id, ["200_silver/204_books/x.md"]); backdateChat(a1.id, 29);
+    const q2 = s.addChat("user", "q2", j2.id); backdateChat(q2.id, 20);
+    const a2 = s.addChat("assistant", "a2", j2.id); backdateChat(a2.id, 19);
+    const q3 = s.addChat("user", "q3", j3.id); backdateChat(q3.id, 10); // still being answered
+    const legacy = s.addChat("user", "old", null); backdateChat(legacy.id, 40); // a row from before job ids were kept
+
+    const first = s.listExchanges(1);
+    expect(first).toHaveLength(1);
+    expect(first[0]!.question.text).toBe("q3");
+    expect(first[0]!.answer).toBeNull();
+    expect(first[0]!.created_at).toBe(first[0]!.question.created_at);
+
+    const rest = s.listExchanges(2, first[0]!.created_at);
+    expect(rest.map((x) => x.question.text)).toEqual(["q2", "q1"]);
+    expect(rest[0]!.answer?.text).toBe("a2");
+    expect(rest[1]!.answer?.text).toBe("a1");
+    expect(rest[1]!.answer?.sources).toBe(JSON.stringify(["200_silver/204_books/x.md"]));
+
+    const tail = s.listExchanges(10, rest[1]!.created_at);
+    expect(tail.map((x) => x.question.text)).toEqual(["old"]);
+    expect(tail[0]!.job_id).toBeNull();
+    expect(tail[0]!.answer).toBeNull();
+    // answers never show up as exchanges of their own
+    expect(s.listExchanges(50).map((x) => x.question.role)).toEqual(["user", "user", "user", "user"]);
+  });
+  test("keeps the first answer when a job somehow answered twice", () => {
+    s.store.run("DELETE FROM chat_messages");
+    const j = s.createJob("ask", { question: "q" });
+    s.addChat("user", "q", j.id);
+    const a = s.addChat("assistant", "first", j.id);
+    const b = s.addChat("assistant", "second", j.id);
+    backdateChat(a.id, 2); backdateChat(b.id, 1);
+    expect(s.listExchanges(1)[0]!.answer?.text).toBe("first");
+  });
+});

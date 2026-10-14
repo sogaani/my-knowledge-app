@@ -19,6 +19,8 @@ export interface Resurface { date: string; due: ResurfaceEntry[]; onThisDay: Res
 export interface Job { id: string; kind: string; status: "queued" | "running" | "done" | "failed"; payload: string; result: string | null; log: string; commit: string | null; created_at: string; started_at: string | null; finished_at: string | null }
 /** `sources`: JSON array of note paths (the ask skill's 根拠); `sourceNotes`: the same resolved to titles by the API. */
 export interface ChatMessage { id: string; role: "user" | "assistant"; text: string; sources: string; sourceNotes?: NoteHead[]; job_id: string | null; created_at: string }
+/** One question and its answer (null until the worker's answer lands), tied by the ask job's id. `created_at` is the question's. */
+export interface ChatExchange { job_id: string | null; question: ChatMessage; answer: ChatMessage | null; created_at: string }
 export interface SearchMatch { path: string; heading: string; snippet: string; spoiler: boolean; via: ("vector" | "keyword")[]; vectorDistance?: number; bm25?: number }
 export interface SearchHit { path: string; type: string; title: string; status: string; summary: string; tags: string[]; updated: string; archived: boolean; score: number; confidence: "high" | "low"; matches: SearchMatch[] }
 export interface SearchResponse { hits: SearchHit[]; mode: "hybrid" | "vector" | "keyword"; degraded?: string; job?: string; queuedMs?: number | null; workerMs?: number | null }
@@ -59,7 +61,8 @@ export const api = {
   /** Long-poll: resolves when the job is done/failed, or after `wait` seconds (≤ 50) with it still running. */
   jobWait: (id: string, wait = 25) => req<Job>(`/jobs/${id}/wait?wait=${wait}`),
   runJob: (kind: string, payload?: unknown) => req<Job>("/jobs", { method: "POST", body: JSON.stringify({ kind, payload }) }),
-  chat: () => req<ChatMessage[]>("/chat"),
+  /** Newest exchanges first; `before` (a question's `created_at`) pages further back. `next` is the cursor for the following page. */
+  chat: (p: { limit?: number; before?: string } = {}) => req<{ items: ChatExchange[]; next: string | null }>(`/chat?${new URLSearchParams({ ...(p.limit ? { limit: String(p.limit) } : {}), ...(p.before ? { before: p.before } : {}) })}`),
   ask: (question: string) => req<{ message: ChatMessage; job: Job }>("/chat", { method: "POST", body: JSON.stringify({ question }) }),
   sync: () => req<{ changed: boolean }>("/sync", { method: "POST" }),
   build: () => req<{ files: string[] }>("/build", { method: "POST" }),

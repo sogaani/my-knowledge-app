@@ -15,6 +15,8 @@ export interface Job {
 export interface InboxItem { id: string; job_id: string; kind: "url" | "text" | "file"; name: string; path: string | null; url: string | null; text: string | null; created_at: string; fetched: number }
 export interface PushSubscriptionRow { endpoint: string; json: string; email: string | null; user_agent: string | null; created_at: string }
 export interface ChatMessage { id: string; role: "user" | "assistant"; text: string; sources: string; job_id: string | null; created_at: string }
+/** One question and (once the worker's `done` lands) its answer, tied together by the ask job's id. `created_at` is the question's. */
+export interface ChatExchange { job_id: string | null; question: ChatMessage; answer: ChatMessage | null; created_at: string }
 
 mkdirSync(env.dataDir, { recursive: true });
 mkdirSync(join(env.dataDir, "staging"), { recursive: true });
@@ -37,6 +39,7 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
 );
 CREATE TABLE IF NOT EXISTS views (path TEXT NOT NULL, viewed_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS views_path ON views(path, viewed_at);
+CREATE INDEX IF NOT EXISTS chat_role_created ON chat_messages(role, created_at);
 `);
 // added after the first release: older jobs.sqlite files lack the column
 if (!(store.query("PRAGMA table_info(jobs)").all() as { name: string }[]).some((c) => c.name === "heartbeat_at")) store.exec("ALTER TABLE jobs ADD COLUMN heartbeat_at TEXT");
@@ -141,8 +144,21 @@ export function addChat(role: ChatMessage["role"], text: string, jobId: string |
   store.run("INSERT INTO chat_messages(id,role,text,sources,job_id,created_at) VALUES(?,?,?,?,?,?)", [id, role, text, JSON.stringify(sources), jobId, now()]);
   return store.query("SELECT * FROM chat_messages WHERE id=?").get(id) as ChatMessage;
 }
-export function listChat(limit = 100): ChatMessage[] {
-  return (store.query("SELECT * FROM chat_messages ORDER BY created_at DESC LIMIT ?").all(limit) as ChatMessage[]).reverse();
+/**
+ * Newest exchanges first, `limit` at a time; `before` (a question's `created_at`) pages further back.
+ * A question whose answer has not landed yet comes back with `answer: null`. Rows without a job id are questions on their own.
+ */
+export function listExchanges(limit = 10, before?: string): ChatExchange[] {
+  const qs = (before
+    ? store.query("SELECT * FROM chat_messages WHERE role='user' AND created_at < ? ORDER BY created_at DESC LIMIT ?").all(before, limit)
+    : store.query("SELECT * FROM chat_messages WHERE role='user' ORDER BY created_at DESC LIMIT ?").all(limit)) as ChatMessage[];
+  const ids = qs.map((q) => q.job_id).filter((x): x is string => !!x);
+  const answers = new Map<string, ChatMessage>();
+  if (ids.length) {
+    const rows = store.query(`SELECT * FROM chat_messages WHERE role='assistant' AND job_id IN (${ids.map(() => "?").join(",")}) ORDER BY created_at`).all(...ids) as ChatMessage[];
+    for (const r of rows) if (r.job_id && !answers.has(r.job_id)) answers.set(r.job_id, r);
+  }
+  return qs.map((q) => ({ job_id: q.job_id, question: q, answer: q.job_id ? answers.get(q.job_id) ?? null : null, created_at: q.created_at }));
 }
 
 // ---- Note views: one row per note page shown (GET /api/notes/*), so lists can say when a note was last looked at ----

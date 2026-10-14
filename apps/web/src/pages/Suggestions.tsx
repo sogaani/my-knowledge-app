@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { CheckIcon, SparklesIcon, XIcon } from "lucide-react";
-import { api } from "@/api";
+import { CheckIcon, SparklesIcon, XIcon, EyeIcon } from "lucide-react";
+import { api, type Reaction } from "@/api";
 import { Chip, Err, Loading, NoteLink, PageTitle, Section, Toolbar } from "@/components/common";
 import { Button } from "@/components/ui/button";
 import { useAction } from "@/lib/useAction";
@@ -52,10 +52,12 @@ export default function Suggestions() {
   );
 }
 
-/** One row: its own pending state, so the clicked button spins and both buttons lock until the reaction is saved. */
+const REACTION_LABEL: Record<string, string> = { read: "読む/観る", done: "閲覧済み", dismissed: "興味なし" };
+
+/** One row: its own pending state, so the clicked button spins and the buttons lock until the reaction is saved. */
 function SuggestionItem({ it, article, onDone }: { it: Item; article: boolean; onDone: () => Promise<unknown> }) {
-  const [which, setWhich] = useState<"read" | "dismissed" | null>(null);
-  const react = useAction(async (reaction: "read" | "dismissed") => {
+  const [which, setWhich] = useState<Reaction | null>(null);
+  const react = useAction(async (reaction: Reaction) => {
     setWhich(reaction);
     const r = await api.react({ id: it.id, reaction });
     await onDone();
@@ -66,9 +68,10 @@ function SuggestionItem({ it, article, onDone }: { it: Item; article: boolean; o
       <span className="min-w-0 flex-1">
         {it.url ? <a href={it.url} target="_blank" rel="noreferrer">{it.title}</a> : <b>{it.title}</b>} <span className="text-sm text-muted-foreground">{it.line.replace(it.title, "").replace(/^\s*[—-]\s*/, "")}</span>
       </span>
-      {it.reacted ? <Chip>{it.reacted}</Chip> : (
+      {it.reacted ? <Chip>{REACTION_LABEL[it.reacted] ?? it.reacted}</Chip> : (
         <span className="flex gap-1.5">
           <Button size="sm" variant="outline" disabled={react.pending} loading={react.pending && which === "read"} onClick={() => react.run("read")}>{!(react.pending && which === "read") && <CheckIcon data-icon="inline-start" />}{article ? "読んだ" : "読む/観る"}</Button>
+          {!article && <Button size="sm" variant="outline" disabled={react.pending} loading={react.pending && which === "done"} onClick={() => react.run("done")} title="もう読んだ / 観た。読了・視聴済みのノートを作る">{!(react.pending && which === "done") && <EyeIcon data-icon="inline-start" />}閲覧済み</Button>}
           <Button size="sm" variant="ghost" disabled={react.pending} loading={react.pending && which === "dismissed"} onClick={() => react.run("dismissed")}>{!(react.pending && which === "dismissed") && <XIcon data-icon="inline-start" />}興味なし</Button>
         </span>
       )}

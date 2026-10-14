@@ -1,6 +1,6 @@
 /**
  * Suggestions (the `recommend` skill's output) live in Silver as `recommendation` notes (208_reviews): hand-written by
- * the skill, with the user's reactions (read / dismissed) written into the checklist lines by the WebUI. Gold's
+ * the skill, with the user's reactions (read / done / dismissed) written into the checklist lines by the WebUI. Gold's
  * 307_suggestions.md is derived from them by `kb build` and is never edited.
  *
  * A line: `- [ ] **Title** — meta / meta / meta — reason <!-- id: book-slug[, reaction: read] -->` under `## 本`,
@@ -22,7 +22,9 @@ export const RECOMMENDATION_TYPE = "recommendation";
 export const SUGGESTION_SOURCE_PREFIX = "suggestion:";
 
 export type SuggestionKind = "book" | "media" | "article";
-export type Reaction = "read" | "dismissed";
+/** read = will read / watch (note created as `want`); done = already read / watched (note created as `read` / `watched`); dismissed = not interested. */
+export type Reaction = "read" | "done" | "dismissed";
+export const REACTIONS: Reaction[] = ["read", "done", "dismissed"];
 
 export interface SuggestionItem {
   id: string;
@@ -89,7 +91,7 @@ export interface ReactResult {
   /** The recommendation note that was marked. */
   path: string;
   item: SuggestionItem;
-  /** Silver note created for a `read` reaction on a book / media suggestion (null for articles, dismissals, duplicates). */
+  /** Silver note created for a `read` / `done` reaction on a book / media suggestion (null for articles, dismissals, duplicates). */
   created: string | null;
   /** An existing note with the same title, when nothing was created because of it. */
   existing?: string;
@@ -98,9 +100,10 @@ export interface ReactResult {
 const MEDIA_KINDS: Record<string, string> = { movie: "movie", drama: "drama", anime: "anime", documentary: "documentary", video: "video", 映画: "movie", ドラマ: "drama", アニメ: "anime", ドキュメンタリー: "documentary", 動画: "video" };
 
 /**
- * Record a reaction on the current recommendation note (checkbox + `reaction:` in the marker) and, for `read` on a
- * book / media item, create the Silver note with what the line says: author / genre / subgenre (book), kind (media),
- * the reason as summary, `sources: [suggestion:<id>]` and `related` back to the recommendation note.
+ * Record a reaction on the current recommendation note (checkbox + `reaction:` in the marker) and, for `read` / `done`
+ * on a book / media item, create the Silver note with what the line says: author / genre / subgenre (book), kind (media),
+ * the reason as summary, `sources: [suggestion:<id>]` and `related` back to the recommendation note. `done` means the
+ * user had already read / watched it, so the note starts as `read` / `watched` instead of `want`.
  */
 export function reactToSuggestion(cfg: KbConfig, reg: SchemaRegistry, db: Database, o: { id: string; reaction: Reaction }): ReactResult {
   const current = currentRecommendation(db);
@@ -117,8 +120,8 @@ export function reactToSuggestion(cfg: KbConfig, reg: SchemaRegistry, db: Databa
   writeFileSync(abs, stringifyNote(fm, body));
   let created: string | null = null;
   let existing: string | undefined;
-  if (o.reaction === "read" && item.kind !== "article") {
-    const set = noteFieldsFor(reg, item, current.path);
+  if ((o.reaction === "read" || o.reaction === "done") && item.kind !== "article") {
+    const set = noteFieldsFor(reg, item, current.path, o.reaction);
     try {
       created = createNote(cfg, reg, db, { type: item.kind, title: item.title, set });
     } catch (e) {
@@ -129,12 +132,16 @@ export function reactToSuggestion(cfg: KbConfig, reg: SchemaRegistry, db: Databa
   return { path: current.path, item, created, existing };
 }
 
+/** Status a note starts with: `done` = already consumed (book `read`, media `watched`), otherwise `want`. */
+const DONE_STATUS: Record<string, string> = { book: "read", media: "watched" };
+
 /** Frontmatter for a book / media note made from a suggestion line. Exported for tests and for the skill's own use. */
-export function noteFieldsFor(reg: SchemaRegistry, item: SuggestionItem, recommendationPath: string): Record<string, unknown> {
+export function noteFieldsFor(reg: SchemaRegistry, item: SuggestionItem, recommendationPath: string, reaction: "read" | "done" = "read"): Record<string, unknown> {
   const def = reg.get(item.kind);
   const folder = def?.folder ?? "";
   const related = relLink(`${folder}/x.md`, recommendationPath);
-  const set: Record<string, unknown> = { status: "want", summary: item.reason, sources: [`${SUGGESTION_SOURCE_PREFIX}${item.id}`], related: [related] };
+  const status = reaction === "done" ? DONE_STATUS[item.kind] ?? "want" : "want";
+  const set: Record<string, unknown> = { status, summary: item.reason, sources: [`${SUGGESTION_SOURCE_PREFIX}${item.id}`], related: [related] };
   const [a, b, c] = item.meta;
   if (item.kind === "book") {
     if (a) set.author = a;
@@ -154,13 +161,14 @@ export function relLink(from: string, to: string): string {
   return r.startsWith(".") ? r : `./${r}`;
 }
 
-/** Per-section counts of a recommendation note: how many items are read / dismissed / still waiting. */
-export function suggestionCounts(items: SuggestionItem[]): { section: string; total: number; read: number; dismissed: number; open: number }[] {
-  const out = new Map<string, { section: string; total: number; read: number; dismissed: number; open: number }>();
+/** Per-section counts of a recommendation note: how many items are read / done / dismissed / still waiting. */
+export function suggestionCounts(items: SuggestionItem[]): { section: string; total: number; read: number; done: number; dismissed: number; open: number }[] {
+  const out = new Map<string, { section: string; total: number; read: number; done: number; dismissed: number; open: number }>();
   for (const it of items) {
-    const row = out.get(it.section) ?? { section: it.section, total: 0, read: 0, dismissed: 0, open: 0 };
+    const row = out.get(it.section) ?? { section: it.section, total: 0, read: 0, done: 0, dismissed: 0, open: 0 };
     row.total++;
     if (it.reaction === "read") row.read++;
+    else if (it.reaction === "done") row.done++;
     else if (it.reaction === "dismissed") row.dismissed++;
     else row.open++;
     out.set(it.section, row);

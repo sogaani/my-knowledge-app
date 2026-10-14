@@ -16,6 +16,8 @@ export interface NoteDetail {
 /** What to look at again today (Gold 393): due for review, written on this day in an earlier year, three random picks. */
 export interface ResurfaceEntry { path: string; type: string; title: string; status: string; summary: string; encrypted: boolean; reason: string; date: string; overdue?: boolean; viewed?: string | null }
 export interface Resurface { date: string; due: ResurfaceEntry[]; onThisDay: ResurfaceEntry[]; random: ResurfaceEntry[] }
+/** read = will read / watch; done = already read / watched; dismissed = not interested. */
+export type Reaction = "read" | "done" | "dismissed";
 export interface Job { id: string; kind: string; status: "queued" | "running" | "done" | "failed"; payload: string; result: string | null; log: string; commit: string | null; created_at: string; started_at: string | null; finished_at: string | null }
 /** `sources`: JSON array of note paths (the ask skill's 根拠); `sourceNotes`: the same resolved to titles by the API. */
 export interface ChatMessage { id: string; role: "user" | "assistant"; text: string; sources: string; sourceNotes?: NoteHead[]; job_id: string | null; created_at: string }
@@ -53,7 +55,7 @@ export const api = {
   gold: (name: string) => req<{ markdown: string }>(`/gold/${name}`),
   /** The current recommendation note (Silver): its body holds the checklist the page parses. */
   suggestions: () => req<{ path: string | null; title?: string; updated: string; markdown: string }>("/suggestions"),
-  react: (body: { id: string; reaction: "read" | "dismissed" }) => req<{ ok: boolean; created: string | null; existing: string | null }>("/suggestions/react", { method: "POST", body: JSON.stringify(body) }),
+  react: (body: { id: string; reaction: Reaction }) => req<{ ok: boolean; created: string | null; existing: string | null }>("/suggestions/react", { method: "POST", body: JSON.stringify(body) }),
   inboxJson: (body: { url?: string; text?: string; title?: string }) => req<{ job: Job }>("/inbox", { method: "POST", body: JSON.stringify(body) }),
   inboxForm: async (form: FormData) => { const r = await fetch("/api/inbox", { method: "POST", body: form }); if (!r.ok) throw new Error(await r.text()); return r.json() as Promise<{ job: Job }>; },
   jobs: () => req<Job[]>("/jobs"),

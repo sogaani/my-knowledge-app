@@ -75,9 +75,9 @@ describe("parseSuggestions", () => {
     expect(items[3]).toMatchObject({ kind: "media", title: "ズーム", meta: ["映画", "ホラー"], reaction: undefined });
     expect(items[5]).toMatchObject({ kind: "article", title: "特集", url: "https://example.com/a", meta: [], reason: "配信ラインナップ" });
     expect(suggestionCounts(items)).toEqual([
-      { section: "本", total: 3, read: 1, dismissed: 0, open: 2 },
-      { section: "映画・ドラマ", total: 2, read: 0, dismissed: 1, open: 1 },
-      { section: "記事", total: 1, read: 0, dismissed: 0, open: 1 },
+      { section: "本", total: 3, read: 1, done: 0, dismissed: 0, open: 2 },
+      { section: "映画・ドラマ", total: 2, read: 0, done: 0, dismissed: 1, open: 1 },
+      { section: "記事", total: 1, read: 0, done: 0, dismissed: 0, open: 1 },
     ]);
   });
   test("relLink writes note-relative paths the way related: does", () => {
@@ -112,6 +112,15 @@ describe("reactToSuggestion", () => {
     expect(list).toContain("- [x] **方舟** — 著者B / mystery / 本格 — 地下建築のクローズドサークル <!-- id: book-hakobune, reaction: read -->");
     expect(list).toContain("<!-- id: book-kinki -->"); // untouched
   });
+  test("done (already read / watched) marks the line and creates the note as read / watched", () => {
+    const root = fixtureRoot();
+    const { cfg, db, reg } = open(root);
+    const r = reactToSuggestion(cfg, reg, db, { id: "book-hakobune", reaction: "done" });
+    expect(r.created).toBe("200_silver/204_books/方舟.md");
+    expect(parseNote(readFileSync(join(root, r.created!), "utf8")).fm).toMatchObject({ status: "read", author: "著者B", sources: ["suggestion:book-hakobune"] });
+    expect(readFileSync(join(root, r.path), "utf8")).toContain("<!-- id: book-hakobune, reaction: done -->");
+    expect(suggestionCounts(parseSuggestions(readFileSync(join(root, r.path), "utf8")))).toContainEqual({ section: "本", total: 3, read: 1, done: 1, dismissed: 0, open: 1 });
+  });
   test("dismissed and articles create nothing; a duplicate title reports the existing note; unknown ids throw", () => {
     const root = fixtureRoot();
     const { cfg, db, reg } = open(root);
@@ -142,8 +151,8 @@ describe("buildGold 307", () => {
     const gold = readFileSync(join(cfg.gold, GOLD.suggestions), "utf8");
     expect(gold).toContain("## 最新: [おすすめ 2026-10-12](../200_silver/208_reviews/おすすめ-2026-10-12.md)（2026-10-12）");
     expect(gold).toContain("本格ミステリ中心");
-    expect(gold).toContain("| 本 | 3 | 1 | 0 | 2 |");
-    expect(gold).toContain("| 映画・ドラマ | 2 | 0 | 1 | 1 |");
+    expect(gold).toContain("| 本 | 3 | 1 | 0 | 0 | 2 |");
+    expect(gold).toContain("| 映画・ドラマ | 2 | 0 | 0 | 1 | 1 |");
     expect(gold).toContain("- [おすすめ 2026-10-05](../200_silver/208_reviews/おすすめ-2026-10-05.md)（2026-10-05、closed）");
     expect(gold).not.toContain("<!-- id:");
   });

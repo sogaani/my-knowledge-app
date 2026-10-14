@@ -3,7 +3,7 @@ import { serveStatic } from "hono/bun";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import {
-  runQuery, parseFilters, readNote, patchFrontmatter, createNote, DuplicateError, extractLinks, currentRecommendation, reactToSuggestion,
+  runQuery, parseFilters, readNote, patchFrontmatter, createNote, DuplicateError, extractLinks, currentRecommendation, reactToSuggestion, REACTIONS,
   keywordSearch, monthlyByCurrency, errorHead, similarNotes, neighborNotes, noteHeads, resurface, LAYOUT, SILVER_PREFIX, GOLD_PREFIX, type SearchResponse, type SearchMode, type Reaction,
 } from "@kb/core";
 import { env } from "./env";
@@ -234,7 +234,7 @@ api.get("/suggestions", requireUser, (c) => {
 });
 api.post("/suggestions/react", requireUser, async (c) => {
   const { id, reaction } = (await c.req.json()) as { id?: string; reaction?: Reaction };
-  if (!id || !reaction || !["read", "dismissed"].includes(reaction)) return c.json({ error: "id and reaction (read | dismissed) required" }, 400);
+  if (!id || !reaction || !REACTIONS.includes(reaction)) return c.json({ error: `id and reaction (${REACTIONS.join(" | ")}) required` }, 400);
   let r: ReturnType<typeof reactToSuggestion>;
   try { r = reactToSuggestion(cfg, reg, db, { id, reaction }); } catch (e) { return c.json({ error: (e as Error).message }, 404); }
   const paths = [r.path, ...(r.created ? [r.created] : [])];

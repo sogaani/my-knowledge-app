@@ -271,13 +271,13 @@ export function suggestionsGold(cfg: KbConfig, db: Database): string {
   const current = currentRecommendation(db);
   const all = runQuery(db, { filters: [{ field: "type", op: "=", value: RECOMMENDATION_TYPE }], orderBy: "-date", limit: 50 })
     .sort((a, b) => String(b.fm.date ?? "").localeCompare(String(a.fm.date ?? "")) || b.updated.localeCompare(a.updated));
-  const lines = ["# おすすめ", "", "`recommend` スキルが 208_reviews の `recommendation` ノートに書き、WebUI の「おすすめ」タブがそれを表示して反応（読む / 興味なし）を記録する。ここは入口だけ。", ""];
+  const lines = ["# おすすめ", "", "`recommend` スキルが 208_reviews の `recommendation` ノートに書き、WebUI の「おすすめ」タブがそれを表示して反応（読む / 閲覧済み / 興味なし）を記録する。ここは入口だけ。", ""];
   if (!current) lines.push("（まだ提案がありません。`recommend` を実行すると作られます）");
   else {
     const counts = suggestionCounts(parseSuggestions(readSuggestionBody(cfg, current.path)));
     lines.push(`## 最新: ${link(current)}（${current.fm.date ?? current.updated}）`, "", ...(current.summary ? [current.summary, ""] : []),
-      "| 区分 | 提案 | 読む・観る | 興味なし | 未反応 |", "|---|---|---|---|---|",
-      ...(counts.length ? counts.map((c) => `| ${c.section} | ${c.total} | ${c.read} | ${c.dismissed} | ${c.open} |`) : ["| （なし） | | | | |"]));
+      "| 区分 | 提案 | 読む・観る | 閲覧済み | 興味なし | 未反応 |", "|---|---|---|---|---|---|",
+      ...(counts.length ? counts.map((c) => `| ${c.section} | ${c.total} | ${c.read} | ${c.done} | ${c.dismissed} | ${c.open} |`) : ["| （なし） | | | | | |"]));
   }
   const past = all.filter((n) => n.path !== current?.path);
   if (past.length) lines.push("", "## 過去の一覧", "", ...past.map((n) => `- ${link(n)}（${n.fm.date ?? n.updated}、${n.status}）${n.summary ? " — " + n.summary : ""}`));

@@ -48,7 +48,7 @@ ingest は「WebUI の投げ込み 1 件 = 1 ジョブ」で、同じ時間帯�
 | `youtube` | 高評価した動画（前回からの差分）と `YOUTUBE_PLAYLIST_IDS` の再生リスト | Google OAuth | 差分（カーソルに既知 ID） |
 | `health` | Google Health API v4 の日別 歩数・距離・消費カロリー・アクティブ時間（`dailyRollUp`）と睡眠（起床日で集計） | Google OAuth（`googlehealth.*.readonly` だけの別トークン。Health API は他のスコープを含むトークンを 403 で拒否する） | 完了した日だけ（昨日まで） |
 | `linkedin` | inbox に置かれた `*LinkedInDataExport*.zip` のプロフィール・職歴・新しいつながり・新しいメッセージ | なし（ZIP を手で置く） | 前回のエクスポートとの差分 |
-| `rss` | `FEED_URLS`（カンマ・空白・改行区切り）の RSS 2.0 / RSS 1.0 / Atom フィード。新着のあるフィードごとに `collect-rss-<slug>-<from>_<to>.json`（slug は URL のホスト + パス。`meta` にフィードの URL と題名）。項目は題名・URL・日付・要約の先頭 300 字だけで本文は取らない（読む価値のあるものは ingest が `kb ingest <url>` で web として取り込む）。パースは Bun 標準の正規表現で素朴に行う（CDATA・実体参照・Atom の `type="html"` は扱う。複雑な XML は想定しない）。1 つのフィードが落ちても他は続け（`WARN` をログに出す）、全部落ちたときだけ失敗 | なし | 差分（カーソルにフィードごとの既知 entry id。初回は窓の中の entry、日付の無いフィードは新しい 50 件） |
+| `rss` | `FEED_URLS`（カンマ・空白・改行区切り）の RSS 2.0 / RSS 1.0 / Atom フィード。新着のあるフィードごとに `collect-rss-<slug>-<from>_<to>.json`（slug は URL のホスト + パス。`meta` にフィードの URL と題名）。項目は題名・URL・日付・要約の先頭 300 字だけ。フィードの要約が薄いもの（Hacker News の "Comments" のように 40 字未満や定型句）だけは記事ページを取って本文冒頭 300 字を要約にする（`summary_source: "page"`。1 回の実行で 40 ページまで、同時 4、失敗したホストは再試行しない）。それ以上の本文は取らない（選別は `curate`、取り込みは WebUI の「取り込む」）。パースは Bun 標準の正規表現で素朴に行う（CDATA・実体参照・Atom の `type="html"` は扱う。複雑な XML は想定しない）。1 つのフィードが落ちても他は続け（`WARN` をログに出す）、全部落ちたときだけ失敗 | なし | 差分（カーソルにフィードごとの既知 entry id。初回は窓の中の entry、日付の無いフィードは新しい 50 件） |
 
 LinkedIn は自分のつながりやメッセージを返す API が EU/EEA 以外に公開されていないため、設定の「データのコピーをダウンロード」を使う。プロフィールの住所・生年月日などはフィードに写さない（ZIP 自体は Bronze に残る）。
 
@@ -62,7 +62,9 @@ kb articles curate [--date d] [--dry] [--json]
      （URL の sha256 先頭 10 桁が id。過去 30 日の候補にある id は除外）
   2. 入力 JSON を 900_system/cache/curate-in.json に書く:
      { date, max, explore_min, interests, avoid, history, items: [{ id, title, feed, published, summary（先頭 200 字）}] }
-     - URL は渡さない。本文も渡さない（collector が保存しているのは要約の先頭 300 字だけ。スキルは WebFetch / kb ingest <url> を禁止）
+     - URL は渡さない。本文も渡さない（collector が保存しているのは要約の先頭 300 字だけ。フィードの要約が薄いもの（Hacker News の "Comments" など 40 字未満や定型句）は
+       collector が記事ページを取って Readability の本文冒頭 300 字を要約にする（`summary_source: "page"`、1 回の実行で 40 ページまで・同時 4・失敗したホストは再試行しない）。
+       スキルは WebFetch / kb ingest <url> を禁止）
      - interests = 900_system/article-prefs.json の interests + active な learning / theme / project の題名とタグ（暗号化ドメインは除外）
      - history = 過去 90 日の 900_system/articles/*.json の集計（フィード別の picked / opened / saved / dismissed / missed、fit / general 別、
        最近 開いた・取り込んだ・興味なし・取りこぼし（選ばれなかったのに開いた）・無視（選んだのに 2 日以上開かれない）の題名、各 30 件まで）

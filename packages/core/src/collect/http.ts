@@ -17,9 +17,12 @@ export const DEFAULT_RETRY: RetryPolicy = { retries: 5, baseMs: 1000, maxMs: 60_
 export type Sleep = (ms: number) => Promise<void>;
 const realSleep: Sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/** `retry` overrides the client's policy for this call (e.g. `{ retries: 0, timeoutMs: 15_000 }` for a best-effort page fetch). */
+export type FetchInit = RequestInit & { retry?: Partial<RetryPolicy> };
+
 export interface HttpClient {
-  fetch(url: string, init?: RequestInit): Promise<Response>;
-  json<T>(url: string, init?: RequestInit): Promise<T>;
+  fetch(url: string, init?: FetchInit): Promise<Response>;
+  json<T>(url: string, init?: FetchInit): Promise<T>;
 }
 
 /** Query strings can carry keys or tokens: never echo them into errors or logs. */
@@ -60,11 +63,12 @@ export function backoffMs(attempt: number, p: RetryPolicy, random = Math.random)
 }
 
 export function createHttp(opts: { policy?: Partial<RetryPolicy>; sleep?: Sleep; fetchImpl?: typeof fetch; onRetry?: (msg: string) => void } = {}): HttpClient {
-  const p = { ...DEFAULT_RETRY, ...opts.policy };
+  const base = { ...DEFAULT_RETRY, ...opts.policy };
   const sleep = opts.sleep ?? realSleep;
   const doFetch = opts.fetchImpl ?? fetch;
 
-  async function fetchRetry(url: string, init: RequestInit = {}): Promise<Response> {
+  async function fetchRetry(url: string, { retry, ...init }: FetchInit = {}): Promise<Response> {
+    const p = retry ? { ...base, ...retry } : base;
     for (let attempt = 0; ; attempt++) {
       let res: Response | undefined;
       let err: unknown;
@@ -90,7 +94,7 @@ export function createHttp(opts: { policy?: Partial<RetryPolicy>; sleep?: Sleep;
 
   return {
     fetch: fetchRetry,
-    async json<T>(url: string, init?: RequestInit): Promise<T> {
+    async json<T>(url: string, init?: FetchInit): Promise<T> {
       // some endpoints answer 200/204 with no body (Gmail messages.batchModify)
       const text = await (await fetchRetry(url, init)).text();
       return (text ? JSON.parse(text) : undefined) as T;

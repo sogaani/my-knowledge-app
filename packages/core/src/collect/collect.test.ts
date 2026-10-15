@@ -38,6 +38,15 @@ describe("retryDecision", () => {
     expect(retryDecision(res(403), Date.now(), '{"error":{"errors":[{"reason":"userRateLimitExceeded"}]}}').retry).toBe(true);
     expect(retryDecision(res(403), Date.now(), '{"error":{"details":[{"reason":"DISALLOWED_OAUTH_SCOPES"}]}}').retry).toBe(false);
   });
+  test("createHttp: a per-call retry override stops retrying (page fetches)", async () => {
+    let calls = 0;
+    const http = createHttp({ fetchImpl: (async () => { calls++; return new Response("x", { status: 503 }); }) as unknown as typeof fetch, sleep: async () => {} });
+    await expect(http.fetch("https://example.test/page", { retry: { retries: 0 } })).rejects.toThrow("HTTP 503");
+    expect(calls).toBe(1);
+    await expect(http.fetch("https://example.test/page")).rejects.toThrow("HTTP 503");
+    expect(calls).toBe(1 + 6); // the client's own policy still applies without the override
+  });
+
   test("createHttp passes the 403 body to the decision", async () => {
     const bodies = ['{"error":{"details":[{"reason":"RATE_LIMIT_EXCEEDED"}]}}', "{}"];
     const waits: number[] = [];
@@ -555,6 +564,50 @@ describe("rss", () => {
     ]);
     expect(rss.configured({})).toBe("missing FEED_URLS");
     expect(rss.configured({ FEED_URLS: "https://a.test/feed" })).toBe(true);
+  });
+
+  test("thin summaries (HN's Comments) are replaced by the head of the page; failures keep the feed's text", async () => {
+    const { isThinSummary, pageSummary, fillThinSummaries } = require("./sources/rss") as typeof import("./sources/rss");
+    expect(isThinSummary("Comments")).toBe(true);
+    expect(isThinSummary("")).toBe(true);
+    expect(isThinSummary("Read more →")).toBe(true);
+    expect(isThinSummary("Article URL: https://x.test/a Comments URL: https://news.ycombinator.com/item?id=1")).toBe(true);
+    expect(isThinSummary("A full sentence of feed summary that says what the article is about.")).toBe(false);
+    const page = (body: string) => `<html><head><title>T</title></head><body><nav>menu</nav><article><h1>Heading</h1><p>${body}</p><p><a href="/x">a link</a> and <b>bold</b> text follow here.</p></article></body></html>`;
+    const long = "The first paragraph explains the whole idea of the article in enough words to count as a summary. ".repeat(4);
+    expect(await pageSummary(page(long), "https://x.test/a")).toMatch(/^(Heading )?The first paragraph explains/);
+    expect((await pageSummary(page(long), "https://x.test/a")).length).toBe(300);
+    const urls: string[] = [];
+    const http = {
+      async fetch(url: string): Promise<Response> {
+        urls.push(url);
+        if (url === "https://x.test/a") return new Response(page(long), { headers: { "content-type": "text/html; charset=utf-8" } });
+        if (url === "https://x.test/pdf") return new Response("%PDF", { headers: { "content-type": "application/pdf" } });
+        throw new Error("HTTP 404");
+      },
+      async json<T>(): Promise<T> { throw new Error("unused"); },
+    };
+    const entries: import("./sources/rss").RssEntry[] = [
+      { id: "1", title: "a", url: "https://x.test/a", date: null, summary: "Comments" },
+      { id: "2", title: "pdf", url: "https://x.test/pdf", date: null, summary: "" },
+      { id: "3", title: "dead", url: "https://dead.test/1", date: null, summary: "Comments" },
+      { id: "4", title: "dead again", url: "https://dead.test/2", date: null, summary: "Comments" },
+      { id: "5", title: "fine", url: "https://x.test/b", date: null, summary: "A full sentence of feed summary that says what the article is about." },
+    ];
+    const infos: string[] = [];
+    const n = await fillThinSummaries(entries, http, { info: (m: string) => infos.push(m), warn() {} }, { budget: 10, failedHosts: new Set() });
+    expect(n).toBe(1);
+    expect(entries[0]).toMatchObject({ summary_source: "page" });
+    expect(entries[0]!.summary.startsWith("Heading The first paragraph") || entries[0]!.summary.startsWith("The first paragraph")).toBe(true);
+    expect(entries[1]!.summary).toBe(""); // not html: left alone
+    expect(entries[2]!.summary).toBe("Comments"); // fetch failed
+    expect(entries[3]!.summary).toBe("Comments"); // same host: not even tried
+    expect(entries[4]!.summary_source).toBeUndefined();
+    expect(urls.sort()).toEqual(["https://dead.test/1", "https://x.test/a", "https://x.test/pdf"]);
+    expect(infos.length).toBe(1);
+    // the budget is a hard cap across the run
+    const st = { budget: 0, failedHosts: new Set<string>() };
+    expect(await fillThinSummaries([{ id: "9", title: "t", url: "https://x.test/a", date: null, summary: "Comments" }], http, { info() {}, warn() {} }, st)).toBe(0);
   });
 
   test("first run takes the window (or the newest undated entries); later runs take unseen ids", () => {

@@ -4,7 +4,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { env } from "./env";
 
-export type JobKind = "ingest" | "ask" | "recommend" | "skill" | "search";
+export type JobKind = "ingest" | "ask" | "recommend" | "skill" | "search" | "curate";
 export type JobStatus = "queued" | "running" | "done" | "failed";
 export interface Job {
   id: string; kind: JobKind; status: JobStatus; payload: string; result: string | null; log: string;

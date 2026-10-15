@@ -2,7 +2,7 @@
 import { existsSync } from "node:fs";
 import {
   loadConfig, openDb, indexNotes, SchemaRegistry, git, gitPull, gitHead, gitCommit, gitPush, gitChangedFiles, gitUnpushed, buildGold, lint,
-  LAYOUT, type LintReport,
+  LAYOUT, ARTICLES_DIR, type LintReport,
 } from "@kb/core";
 import { env } from "./env";
 
@@ -45,8 +45,8 @@ export async function sync(reason: string): Promise<{ changed: boolean; head: st
         // even when the pull brings nothing new (this used to be checked after lastHead was already set).
         const first = !lastHead;
         // Edits a previous pod wrote but never committed are still on the volume: commit them first.
-        if (first && (await git(cfg.root, "status", "--porcelain", "--", LAYOUT.silver, LAYOUT.gold))) {
-          for (const p of [LAYOUT.silver, LAYOUT.gold]) pending.set(p, "web: commit edits left uncommitted by a restart");
+        if (first && (await git(cfg.root, "status", "--porcelain", "--", LAYOUT.silver, LAYOUT.gold, ARTICLES_DIR))) {
+          for (const p of [LAYOUT.silver, LAYOUT.gold, ARTICLES_DIR]) pending.set(p, "web: commit edits left uncommitted by a restart");
         }
         await flushCommits().catch((e) => console.error(`[sync:${reason}] commit failed:`, (e as Error).message));
         const { before, after } = await gitPull(cfg.root, { rebase: true });

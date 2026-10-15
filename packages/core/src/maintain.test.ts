@@ -211,7 +211,7 @@ describe("validateBronze", () => {
     expect(issues.map((i) => [i.level, i.path, i.msg]).sort()).toEqual([
       ["warn", "20261011-mail-dddddd", "processed_to entry is a Bronze ID, not a Silver path: 20261011-mail-bbbbbb"],
       ["warn", "20261011-note-eeeeee", "processed_to entry does not exist (moved to _archive/ or renamed?): 200_silver/206_projects/2026-10_旧/README.md"],
-      ["warn", "20261011-note-eeeeee", 'processed_to entry is not a path under 200_silver/: "200_silver/204_books/本A.md"'],
+      ["warn", "20261011-note-eeeeee", 'processed_to entry is not a path under 200_silver/ or 900_system/articles/: "200_silver/204_books/本A.md"'],
     ]);
   });
   test("is part of validateAll", () => {

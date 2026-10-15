@@ -12,6 +12,7 @@ import { formatDays, loadTokenDays, type TokenDays } from "./collect/tokens";
 import type { Database } from "bun:sqlite";
 import { SILVER_PREFIX, type KbConfig } from "./config";
 import { resurface, splitEncrypted, type ResurfaceEntry } from "./resurface";
+import { articleStats, listArticleDays } from "./articles";
 
 export interface CollectSourceSummary {
   id: string;
@@ -44,6 +45,8 @@ export interface OpsDigest {
   agentOk: boolean;
   /** Notes to look at again today (resurface.ts, the same list as Gold 393); null when the digest was built without the index. */
   review: { due: number; onThisDay: number; /** plaintext entries only (the digest text is stored in the API's job table) */ top: ResurfaceEntry[] } | null;
+  /** The latest article day before today (articles.ts): how yesterday's picks fared. Null = no day file yet. */
+  articles: { date: string; picked: number; opened: number; saved: number; dismissed: number } | null;
 }
 
 /** Collapse an HTTP error body (often a Cloudflare HTML page) to one line of at most `max` characters. */
@@ -147,9 +150,16 @@ export function buildOpsDigest(cfg: KbConfig, input: OpsDigestInput): OpsDigest 
     tokens: loadTokenDays(cfg, now),
     agentOk: input.agentOk,
     review: input.db ? reviewSummary(input.db, localDate(now)) : null,
+    articles: articlesSummary(cfg, localDate(now)),
   };
 }
 
+function articlesSummary(cfg: KbConfig, today: string): OpsDigest["articles"] {
+  const d = listArticleDays(cfg, { limit: 1, before: today })[0];
+  if (!d) return null;
+  const s = articleStats(d);
+  return { date: d.date, picked: s.picked, opened: s.opened, saved: s.saved, dismissed: s.dismissed };
+}
 function reviewSummary(db: Database, date: string): OpsDigest["review"] {
   const r = resurface(db, date);
   return { due: r.due.length, onThisDay: r.onThisDay.length, top: splitEncrypted(r.due).plain.slice(0, 5) };
@@ -162,6 +172,7 @@ export function formatOpsDigest(d: OpsDigest): { title: string; body: string } {
   const lines = [collectLine(d), notesLine(d)];
   if (d.tokens.length) lines.push(tokensLine(d.tokens));
   if (d.review) lines.push(reviewLine(d.review));
+  if (d.articles) lines.push(articlesLine(d.articles));
   if (d.judgements.length) {
     const first = d.judgements[0]!;
     lines.push(`迷った点 ${d.judgements.length}: ${first.length > 80 ? `${first.slice(0, 80)}…` : first}`);
@@ -178,6 +189,7 @@ export function renderOpsDigest(d: OpsDigest): string {
     lines.push(reviewLine(d.review));
     for (const e of d.review.top) lines.push(`  ${e.title}: ${e.reason}`);
   }
+  if (d.articles) lines.push(articlesLine(d.articles));
   if (d.judgements.length) lines.push("", "迷った点:", ...d.judgements.map((j) => `- ${j}`));
   return lines.join("\n");
 }
@@ -187,6 +199,11 @@ function reviewLine(r: NonNullable<OpsDigest["review"]>): string {
   return `今日見直すノート ${r.due} 件${r.onThisDay ? ` · 同じ月日の過去ノート ${r.onThisDay} 件` : ""}`;
 }
 
+/** "記事 10/14: ピック 8 · 開いた 3 · 取り込み 1" — whether the picks are being read (the WebUI 記事 tab has the list). */
+function articlesLine(a: NonNullable<OpsDigest["articles"]>): string {
+  const [, m, day] = a.date.split("-");
+  return `記事 ${Number(m)}/${Number(day)}: ピック ${a.picked} · 開いた ${a.opened} · 取り込み ${a.saved}${a.dismissed ? ` · 興味なし ${a.dismissed}` : ""}`;
+}
 function collectLine(d: OpsDigest): string {
   if (!d.collect.length) return "収集: 記録なし";
   const parts = d.collect.map((s) => s.status === "ok" ? `${s.id} ${s.items}` : s.status === "failed" ? `${s.id} 失敗` : `${s.id} 未実行${s.ageHours !== undefined ? ` ${Math.round(s.ageHours / 24)}d` : ""}`);

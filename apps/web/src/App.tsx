@@ -11,6 +11,7 @@ import Note from "./pages/Note";
 import Inbox from "./pages/Inbox";
 import Chat from "./pages/Chat";
 import Suggestions from "./pages/Suggestions";
+import Articles from "./pages/Articles";
 import Trading from "./pages/Trading";
 import Jobs from "./pages/Jobs";
 import Gold from "./pages/Gold";
@@ -44,6 +45,7 @@ export default function App() {
         <Item to="/inbox">投げ込み</Item>
         <Item to="/chat">チャット</Item>
         <Item to="/suggestions">おすすめ</Item>
+        <Item to="/articles">記事</Item>
         <Item to="/trading">売買</Item>
         <Item to="/gold/300_market">市場メモ</Item>
         <Item to="/gold/390_daily">ライフログ</Item>
@@ -60,6 +62,7 @@ export default function App() {
           <Route path="/inbox" element={<Inbox />} />
           <Route path="/chat" element={<Chat />} />
           <Route path="/suggestions" element={<Suggestions />} />
+          <Route path="/articles" element={<Articles />} />
           <Route path="/trading" element={<Trading />} />
           <Route path="/jobs" element={<Jobs />} />
           <Route path="/notes/:type" element={<Notes />} />

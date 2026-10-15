@@ -5,6 +5,7 @@ import { basename, join } from "node:path";
 import {
   runQuery, parseFilters, readNote, patchFrontmatter, createNote, DuplicateError, extractLinks, currentRecommendation, reactToSuggestion, REACTIONS,
   keywordSearch, monthlyByCurrency, errorHead, similarNotes, neighborNotes, noteHeads, resurface, LAYOUT, SILVER_PREFIX, GOLD_PREFIX, type SearchResponse, type SearchMode, type Reaction,
+  listArticleDays, reactToArticle, ARTICLE_REACTIONS, type ArticleReaction,
 } from "@kb/core";
 import { env } from "./env";
 import { authenticate, requireUser, requireWorker, requireUserOrWorker, type Principal } from "./auth";
@@ -242,6 +243,33 @@ api.post("/suggestions/react", requireUser, async (c) => {
   return c.json({ ok: true, created: r.created, existing: r.existing ?? null, commit });
 });
 
+/**
+ * Articles: the daily RSS picks (900_system/articles/<date>.json, written by the curate job on the Mac). Newest day
+ * first, `before` (a date) pages back. Reactions are written into the day file and committed like a note edit;
+ * `saved` also queues the URL for ingest, the same as dropping it on the 投げ込み page.
+ */
+api.get("/articles", requireUser, (c) => {
+  const limit = Math.max(1, Math.min(30, Number(c.req.query("limit") ?? 1) || 1));
+  const before = c.req.query("before") || undefined;
+  const items = listArticleDays(cfg, { limit, before });
+  return c.json({ items, next: items.length === limit ? items[items.length - 1]!.date : null });
+});
+api.post("/articles/react", requireUser, async (c) => {
+  const { date, id, reaction } = (await c.req.json()) as { date?: string; id?: string; reaction?: ArticleReaction };
+  if (!date || !id || !reaction || !ARTICLE_REACTIONS.includes(reaction)) return c.json({ error: `date, id and reaction (${ARTICLE_REACTIONS.join(" | ")}) required` }, 400);
+  let r: ReturnType<typeof reactToArticle>;
+  try { r = reactToArticle(cfg, { date, id, reaction }); } catch (e) { return c.json({ error: (e as Error).message }, 404); }
+  const commit = await timed(c, "index", () => commitKb([r.path], `web: article ${id} ${reaction}`));
+  const job = reaction === "saved" ? queueUrlIngest(r.item.url) : null;
+  return c.json({ ok: true, item: r.item, job, commit });
+});
+/** One URL → one ingest job (what POST /inbox does for a pasted URL). */
+function queueUrlIngest(url: string) {
+  const jobId = newId(), id = newId();
+  addInboxItem({ id, job_id: jobId, kind: "url", name: url, path: null, url, text: null });
+  return createJob("ingest", { items: [{ id, kind: "url", name: url }] }, jobId);
+}
+
 /** Uploaded filenames come from outside (web UI): keep the basename, drop path/control chars. */
 const safeName = (n: string, id: string) => {
   const b = basename(n).replace(/[\\/:*?"<>|\x00-\x1f]/g, "_").replace(/^\.+/, "").slice(0, 150);
@@ -298,7 +326,7 @@ api.get("/jobs/:id/wait", requireUser, async (c) => {
 /** Jobs queued with the worker credentials come from launchd (enqueue.sh): marked `scheduled` so the worker knows to send the morning digest. */
 api.post("/jobs", requireUserOrWorker, async (c) => {
   const b = (await c.req.json()) as { kind: JobKind; payload?: unknown };
-  if (!["ingest", "ask", "recommend", "skill"].includes(b.kind)) return c.json({ error: "bad kind" }, 400);
+  if (!["ingest", "ask", "recommend", "skill", "curate"].includes(b.kind)) return c.json({ error: "bad kind" }, 400);
   const payload = b.payload && typeof b.payload === "object" ? (b.payload as Record<string, unknown>) : {};
   return c.json(createJob(b.kind, c.get("principal").kind === "worker" ? { ...payload, scheduled: true } : payload));
 });
@@ -356,7 +384,7 @@ w.get("/jobs/next", async (c) => {
  */
 w.post("/jobs/claim", (c) => {
   const kind = c.req.query("kind") ?? "";
-  if (!["ingest", "ask", "recommend", "skill"].includes(kind)) return c.json({ error: "bad kind" }, 400);
+  if (!["ingest", "ask", "recommend", "skill", "curate"].includes(kind)) return c.json({ error: "bad kind" }, 400);
   const jobs = claimQueuedJobs(kind as JobKind).map((j) => ({ ...j, inbox: j.kind === "ingest" ? inboxItemsForJob(j.id).map(({ path, ...i }) => i) : [] }));
   return c.json({ jobs });
 });
@@ -397,7 +425,7 @@ w.post("/jobs/:id/done", async (c) => {
     }
     if (b.notify?.title) pushes.push({ url: "/jobs", tag: "ops-digest", ...b.notify, body: String(b.notify.body ?? "").slice(0, 1000) });
     for (const p of pushes) sendPushToAll(p).then((r) => console.log(`push ${p.tag}: sent ${r.sent}, removed ${r.removed}, failed ${r.failed}`), (e) => console.error("push:", e));
-    if (b.ok) notifyJobDone(job.kind, payload, { id, answer: b.answer }).catch((e) => console.error("push:", e));
+    if (b.ok) notifyJobDone(job.kind, payload, { id, answer: b.answer, result: b.result }).catch((e) => console.error("push:", e));
   }
   return c.json({ ok: true });
 });
@@ -411,8 +439,15 @@ const jobLabel = (kind: string, payload: Record<string, unknown>) => (kind === "
  * Push notifications for jobs people wait for. ask: the answer landed in the chat (the question is the title, the answer's
  * head the body), so the page need not stay open. trade-plan: only when today's (JST) sheet exists, so a 休場 run stays silent.
  */
-async function notifyJobDone(kind: string, payload: Record<string, unknown>, done: { id: string; answer?: string }) {
+async function notifyJobDone(kind: string, payload: Record<string, unknown>, done: { id: string; answer?: string; result?: unknown }) {
   if (!pushEnabled()) return;
+  if (kind === "curate") {
+    // the morning's picks: once per date, only when there are some (a run with nothing new stays silent)
+    const r = (done.result ?? {}) as { skipped?: boolean; date?: string | null; picked?: number; top?: string[] };
+    if (r.skipped || !r.date || !r.picked) return;
+    const res = await sendPushToAll({ title: `今日の記事 ${r.picked} 件`, body: (r.top ?? []).join(" / ").slice(0, 200), url: "/articles", tag: `articles-${r.date}` });
+    console.log(`push articles ${r.date}: sent ${res.sent}, removed ${res.removed}, failed ${res.failed}`);
+  }
   if (kind === "ask") {
     const r = await sendPushToAll(askDonePush(String(payload.question ?? ""), done.answer ?? "", done.id));
     console.log(`push ask ${done.id.slice(0, 8)}: sent ${r.sent}, removed ${r.removed}, failed ${r.failed}`);

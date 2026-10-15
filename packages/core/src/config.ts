@@ -67,6 +67,8 @@ export const GOLD = {
   projects: "306_projects.md",
   suggestions: "307_suggestions.md",
   trading: "308_trading.md",
+  /** Daily RSS picks (articles.ts); the data itself is 900_system/articles/*.json. */
+  articles: "309_articles.md",
   health: "310_health.md",
   location: "311_location.md",
   // 39x: views across domains (no domain number of their own)

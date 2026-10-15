@@ -15,7 +15,7 @@ export interface BronzeMeta {
   sha256: string;
   files: string[];
   title?: string;
-  processed_to: string[]; // silver paths; ["-"] = reviewed, nothing to reflect in Silver (`kb processed <id> --none`)
+  processed_to: string[]; // silver paths (or the 900_system/articles day file for rss feeds); ["-"] = reviewed, nothing to reflect in Silver (`kb processed <id> --none`)
   notes?: string;
 }
 

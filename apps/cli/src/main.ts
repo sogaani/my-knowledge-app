@@ -5,6 +5,7 @@ import {
   ingestFile, ingestUrl, sourceExcerpt, markProcessed, listInbox, parseFilters, runQuery, buildGold,
   validateAll, archiveNote, lint, backupBronze, pruneBronze, logAccess, importPortfolio, importHealth, importLocation, importCalendar, importKoboLibrary, importMail, formatMailImport, runCollectors, type BronzeKind,
   search, VectorStore, embedNotes, makeEmbedder, setupLindera, linderaStatus, resolveTokenizer, readVectorMeta, type SearchMode,
+  LAYOUT, curateArticles, buildHistory, listArticleDays, articleStats,
 } from "@kb/core";
 
 const argv = process.argv.slice(2);
@@ -18,7 +19,7 @@ function flags(args: string[]) {
     if (a.startsWith("--")) {
       const [k, v] = a.slice(2).split("=");
       if (v !== undefined) f[k] = v;
-      else if (args[i + 1] !== undefined && !args[i + 1].startsWith("--") && ["set", "dest", "kind", "text", "status", "superseded-by", "older-than", "type", "limit", "order", "chars", "title", "folder", "section", "fields", "mode", "account", "max-lookups"].includes(k)) f[k] = args[++i];
+      else if (args[i + 1] !== undefined && !args[i + 1].startsWith("--") && ["set", "dest", "kind", "text", "status", "superseded-by", "older-than", "type", "limit", "order", "chars", "title", "folder", "section", "fields", "mode", "account", "max-lookups", "date"].includes(k)) f[k] = args[++i];
       else f[k] = true;
     } else pos.push(a);
   }
@@ -288,6 +289,33 @@ switch (cmd) {
     f.json ? json(r) : console.log(formatMailImport(r, { dryRun: !!f["dry-run"] }));
     break;
   }
+  case "articles": {
+    // curate: RSS feed entries → `curate` skill (JSON in, JSON out) → 900_system/articles/<date>.json. The agent's output
+    // goes to stderr so stdout stays the result (--json for the worker).
+    const { f, pos } = flags(argv);
+    const sub = pos[0];
+    if (sub === "curate") {
+      const script = join(cfg.root, LAYOUT.system, "scripts", "run-agent.sh");
+      const run = async (inPath: string, outPath: string) => {
+        const proc = Bun.spawn(["bash", script, "curate", inPath, outPath], { cwd: cfg.root, stdout: "pipe", stderr: "pipe", env: { ...process.env, KB_ROOT: cfg.root } });
+        const pump = async (s: ReadableStream<Uint8Array>) => { for await (const chunk of s) process.stderr.write(chunk); };
+        await Promise.all([pump(proc.stdout), pump(proc.stderr)]);
+        if ((await proc.exited) !== 0) throw new Error("curate: the agent exited with an error");
+      };
+      const r = await curateArticles(cfg, { date: typeof f.date === "string" ? f.date : undefined, db: db(), dry: !!f.dry, run });
+      if (r.input) { json(r.input); break; }
+      for (const w of r.warnings) warn(`warn: ${w}`);
+      const picks = r.day ? r.day.items.filter((i) => i.picked) : [];
+      const summary = { skipped: !!r.skipped, date: r.day?.date ?? null, path: r.path ?? null, candidates: r.candidates, picked: picks.length, top: picks.slice(0, 3).map((i) => i.title), warnings: r.warnings };
+      if (f.json) json(summary);
+      else if (r.skipped) console.log("articles: nothing new in the feeds");
+      else console.log(`${r.path}\t${picks.length} picks / ${r.candidates} candidates`);
+      break;
+    }
+    if (sub === "history") { json(buildHistory(listArticleDays(cfg))); break; }
+    if (sub === "stats") { for (const d of listArticleDays(cfg, { limit: 14 })) { const s = articleStats(d); console.log(`${d.date}\tpicked ${s.picked}/${s.candidates}\topened ${s.opened}\tsaved ${s.saved}\tdismissed ${s.dismissed}`); } break; }
+    die("usage: kb articles curate [--date YYYY-MM-DD] [--dry] [--json] | kb articles history | kb articles stats");
+  }
   case "root": {
     console.log(cfg.root);
     break;
@@ -343,7 +371,9 @@ switch (cmd) {
   inbox                              list 000_inbox
   ingest <path|url> [--kind] [--keep] | --all   move into Bronze, print id
   source <id> [--full]               Bronze meta + excerpt (logged)
-  processed <id> <silver-path>... | <id> --none   record which Silver notes came from a Bronze item (--none: nothing to reflect)
+  processed <id> <silver-path>... | <id> --none   record which Silver notes came from a Bronze item (--none: nothing to reflect; rss feeds get the 900_system/articles day file from \`kb articles curate\`)
+  articles curate [--date d] [--dry] [--json]   RSS feed entries → \`curate\` skill (JSON only) → 900_system/articles/<date>.json (+ Bronze processed); --dry prints the agent's input
+  articles history | articles stats  what happened to earlier picks (the agent's feedback) | per-day counts
   health import <bronze-id>          rebuild the monthly health_log notes from a collect-health feed
   calendar import <bronze-id>        monthly calendar_log notes (212_calendar) from the collect-calendar feeds
   location import <bronze-id> [--max-lookups 300] [--all]   Google Maps Timeline export → monthly location_log (Places API, 70-day cache)

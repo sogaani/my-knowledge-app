@@ -6,7 +6,7 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import {
-  LAYOUT, SILVER_PREFIX, SIMILAR_REL, loadConfig, git, gitCommitPush, gitStatusPaths, hasUpstream, openDb, indexNotes, parseFilters, search, makeEmbedder, listInbox,
+  LAYOUT, SILVER_PREFIX, SIMILAR_REL, ARTICLES_DIR, loadConfig, git, gitCommitPush, gitStatusPaths, hasUpstream, openDb, indexNotes, parseFilters, search, makeEmbedder, listInbox,
   clipError, errorHead, buildOpsDigest, formatOpsDigest, renderOpsDigest, type SearchMode,
 } from "@kb/core";
 import { planIngest, ingestCommitMessage, ingestDoneBodies, ingestFailureBodies, type IngestOutcome } from "./ingest-batch";
@@ -37,13 +37,19 @@ async function api(path: string, init: RequestInit = {}) {
 const log = (id: string, text: string) => api(`/jobs/${id}/log`, { method: "POST", body: text, headers: { "content-type": "text/plain" } }).catch(() => {});
 
 /** Run run-agent.sh and stream its output to the job log. Returns full stdout. */
-async function runAgent(jobId: string, args: string[]): Promise<{ out: string; code: number }> {
-  const script = join(cfg.root, LAYOUT.system, "scripts", "run-agent.sh");
-  const proc = Bun.spawn(["bash", script, ...args], { cwd: cfg.root, stdout: "pipe", stderr: "pipe", env: { ...process.env, KB_ROOT: cfg.root } });
+function runAgent(jobId: string, args: string[]): Promise<{ out: string; code: number }> {
+  return streamed(jobId, ["bash", join(cfg.root, LAYOUT.system, "scripts", "run-agent.sh"), ...args]);
+}
+/** `kb` with its stdout and stderr streamed to the job log (for commands that run an agent themselves). Returns stdout only. */
+function kbStreamed(jobId: string, args: string[]): Promise<{ out: string; code: number }> {
+  return streamed(jobId, ["bun", "run", join(import.meta.dir, "../../cli/src/main.ts"), ...args]);
+}
+async function streamed(jobId: string, cmd: string[]): Promise<{ out: string; code: number }> {
+  const proc = Bun.spawn(cmd, { cwd: cfg.root, stdout: "pipe", stderr: "pipe", env: { ...process.env, KB_ROOT: cfg.root } });
   let out = "", buf = "";
   const flush = setInterval(() => { if (buf) { log(jobId, buf); buf = ""; } }, 2000);
-  const pump = async (s: ReadableStream<Uint8Array>) => { for await (const chunk of s) { const t = new TextDecoder().decode(chunk); out += t; buf += t; } };
-  await Promise.all([pump(proc.stdout), pump(proc.stderr)]);
+  const pump = async (s: ReadableStream<Uint8Array>, keep: boolean) => { for await (const chunk of s) { const t = new TextDecoder().decode(chunk); if (keep) out += t; buf += t; } };
+  await Promise.all([pump(proc.stdout, true), pump(proc.stderr, false)]);
   const code = await proc.exited;
   clearInterval(flush);
   if (buf) await log(jobId, buf);
@@ -59,7 +65,7 @@ async function kb(...args: string[]): Promise<string> {
 
 /** Silver, Gold and the similar-notes pairs `kb build` (→ embed) rewrote: the API pod reads them from git. */
 async function commitAll(message: string): Promise<string | null> {
-  const paths = [LAYOUT.silver, LAYOUT.gold, ...(existsSync(join(cfg.root, SIMILAR_REL)) ? [SIMILAR_REL] : [])];
+  const paths = [LAYOUT.silver, LAYOUT.gold, ...[SIMILAR_REL, ARTICLES_DIR].filter((p) => existsSync(join(cfg.root, p)))];
   return gitCommitPush(cfg.root, paths, message, { author: "kb-worker <kb-worker@local>" });
 }
 
@@ -194,6 +200,20 @@ async function run(job: Job, payload: Record<string, unknown>) {
         body = { ok: code === 0, answer, sources };
         break;
       }
+      case "curate": {
+        // RSS picks of the day: `kb articles curate` runs the curate skill itself (JSON in / JSON out) and prints a JSON summary.
+        const { out, code } = await kbStreamed(job.id, ["articles", "curate", "--json"]);
+        if (code !== 0) throw new Error(`kb articles curate failed (exit ${code}): ${tail(out, 300)}`);
+        const summary = lastJson(out) as { skipped: boolean; date: string | null; path: string | null; candidates: number; picked: number; top: string[]; warnings: string[] } | null;
+        if (!summary) throw new Error(`kb articles curate: no JSON summary in its output: ${tail(out, 300)}`);
+        let commit: string | null = null;
+        if (!summary.skipped) {
+          await kb("build").catch(() => {});
+          commit = await commitAll(`curate: 記事 ${summary.date} (${summary.picked}/${summary.candidates})`);
+        }
+        body = { ok: true, result: summary, commit };
+        break;
+      }
       case "recommend":
       case "skill": {
         const name = job.kind === "recommend" ? "recommend" : String(payload.name ?? "");
@@ -216,6 +236,12 @@ async function run(job: Job, payload: Record<string, unknown>) {
 }
 
 function tail(s: string, n = 2000) { return s.length > n ? "…" + s.slice(-n) : s; }
+/** The JSON object a `--json` command printed last (its stdout may carry other lines before it). */
+function lastJson(out: string): unknown {
+  const i = out.lastIndexOf("\n{");
+  const text = i >= 0 ? out.slice(i + 1) : out.trimStart().startsWith("{") ? out : "";
+  try { return text ? JSON.parse(text) : null; } catch { return null; }
+}
 /** The ask skill ends with "根拠:" followed by note paths. */
 function parseAnswer(out: string): { answer: string; sources: string[] } {
   const i = out.lastIndexOf("根拠:");
@@ -238,4 +264,4 @@ async function lane(kinds: string) {
 }
 
 info(`kb worker: api=${API} kb=${cfg.root} agent=${process.env.KB_AGENT ?? "claude"}`);
-await Promise.all([lane("search"), lane("ingest,ask,recommend,skill")]);
+await Promise.all([lane("search"), lane("ingest,ask,recommend,skill,curate")]);

@@ -9,6 +9,7 @@ import { listInbox, mailCategory, processState, readMeta, rewriteProcessedTo, wa
 import { SUGGESTION_SOURCE_PREFIX, relLink, suggestionIds } from "./suggest";
 import { MONTHLY_TYPES, isBareMonthTitle, monthlyTitle } from "./create";
 import { STALE_DAYS, isStale } from "./resurface";
+import { ARTICLES_DIR } from "./articles";
 
 export interface Issue { level: "error" | "warn"; path: string; msg: string }
 
@@ -62,7 +63,8 @@ export function validateAll(cfg: KbConfig, reg: SchemaRegistry): Issue[] {
 }
 
 /**
- * Bronze → Silver record: every processed_to entry is `-` or an existing Silver path. Catches paths left behind by a move
+ * Bronze → Silver record: every processed_to entry is `-`, an existing Silver path, or (rss feeds) the day file under
+ * 900_system/articles/ the curate run wrote. Catches paths left behind by a move
  * (`kb archive` before it rewrote Bronze), Bronze IDs passed to `kb processed` by mistake, and shell-quoted names.
  * Warnings only (Bronze is local to the Mac; the pre-commit validate must not fail on it). `path` is the Bronze id.
  */
@@ -72,7 +74,7 @@ export function validateBronze(cfg: KbConfig): Issue[] {
     for (const p of m.processed_to) {
       if (p === "-") continue;
       const why = BRONZE_ID.test(p) ? "is a Bronze ID, not a Silver path"
-        : !p.startsWith(SILVER_PREFIX) ? `is not a path under ${SILVER_PREFIX}`
+        : !(p.startsWith(SILVER_PREFIX) || p.startsWith(`${ARTICLES_DIR}/`)) ? `is not a path under ${SILVER_PREFIX} or ${ARTICLES_DIR}/`
         : !existsSync(join(cfg.root, p)) ? "does not exist (moved to _archive/ or renamed?)"
         : null;
       if (why) issues.push({ level: "warn", path: m.id, msg: `processed_to entry ${why}: ${p}` });

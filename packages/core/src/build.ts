@@ -9,6 +9,7 @@ import { currencyOf, formatMoney, formatTotals, monthlyByCurrency } from "./mone
 import { RECOMMENDATION_TYPE, currentRecommendation, parseSuggestions, readSuggestionBody, suggestionCounts } from "./suggest";
 import { IMPORTED_SUMMARY, bookDate, bookYear, unratedImported } from "./books";
 import { renderResurface, renderResurfaceHome, resurface } from "./resurface";
+import { renderArticlesGold } from "./articles";
 
 /** Regenerate every Gold markdown file from the index. Gold is derived; never hand-edited. */
 export function buildGold(cfg: KbConfig, db: Database): string[] {
@@ -107,6 +108,8 @@ export function buildGold(cfg: KbConfig, db: Database): string[] {
 
   // 307 suggestions: the current `recommendation` note (208_reviews) and its reaction counts; the list itself stays in Silver
   out(GOLD.suggestions, suggestionsGold(cfg, db));
+  // 309 articles: the daily RSS picks (900_system/articles/*.json, written by the curate job) and how they fared
+  out(GOLD.articles, renderArticlesGold(cfg));
 
   // 300 market: catalyst calendar + stock / theme lists (200_market is not encrypted: no amounts or quantities here)
   {
@@ -221,6 +224,7 @@ export function buildGold(cfg: KbConfig, db: Database): string[] {
     `- [プロジェクト](${GOLD.projects}) — 進行中 ${pBy.active?.length ?? 0}${workActive ? `（仕事 ${workActive}）` : ""}`,
     `- [学習](${GOLD.learning}/index.md)`,
     `- [おすすめ](${GOLD.suggestions})`,
+    `- [記事](${GOLD.articles}) — RSS から毎朝選んだ記事`,
     `- [売買シート](${GOLD.trading})${plans.length ? ` — 最新 ${plans[0].fm.date ?? plans[0].updated}` : ""}`,
     `- [市場メモ](${GOLD.market}) — 銘柄・テーマ・カタリスト`,
     `- [健康記録](${GOLD.health})`,

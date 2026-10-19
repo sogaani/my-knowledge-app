@@ -3,8 +3,7 @@
 ```
 Browser ─Cloudflare Access (Google)─▶ Tunnel ─▶ cloudflare-tunnel-ingress-controller ─▶ kb-api Service ─▶ kb-api Pod
                                                                       /data     kb-data  (Longhorn)   kb: git clone, git-crypt unlocked
-                                                                      /data/app kb-state (Longhorn)   jobs.sqlite, staging
-                                                                      /cache    emptyDir             kb.sqlite (note index, rebuilt on start)
+                                                                      /data/app kb-state (Longhorn)   jobs.sqlite, kb.sqlite (note index), staging
 Mac worker ─Access service token + WORKER_TOKEN─▶ https://kb.wanawata.com/api/worker/*  (+ POST /api/jobs for launchd schedules)
 ```
 Gmail is pulled by the Mac collector (`docs/collect.md`); the old Apps Script push path (`kb-ingest` service token, `INGEST_TOKEN`, a `service` principal on `POST /api/inbox`) was removed in 2026-10, see §5.
@@ -104,7 +103,8 @@ The plist runs the worker through `bash -l`, so the agent CLI (claude/codex/gemi
 ## Notes
 - Data updates never redeploy the Pod: the worker reports a commit, the API `git pull`s and re-indexes. A 5-minute `git fetch` catches manual pushes.
 - On the first sync the pod sits in `CreateContainerConfigError` until the operator has written Secret `kb-worker`; it starts on its own once it exists.
-- Both PVCs are Longhorn volumes (`storageClass: longhorn`, ext4, 3 replicas) since 2026-10-19, so the Pod can run on any node and SQLite's file locks work. `jobs.sqlite` is on `kb-state`; the index `kb.sqlite` stays in an emptyDir (`KB_DB=/cache/kb.sqlite`) because it is rebuilt from the notes on every start anyway.
+- Both PVCs are Longhorn volumes (`storageClass: longhorn`, ext4, 3 replicas) since 2026-10-19, so the Pod can run on any node and SQLite's file locks work. `jobs.sqlite` and the note index `kb.sqlite` (`KB_DB=/data/app/kb.sqlite`) are both on `kb-state`.
+- The note index is not rebuilt on start (it was, in an emptyDir, until 2026-10-19): the startup sync re-reads only notes whose mtime differs from the indexed row, and walks everything only when the file is empty. `INDEX_VERSION` in `packages/core/src/db.ts` guards the file: bump it when the index schema or what is extracted per note changes, and `openDb` drops and rebuilds the tables on the next start. To force a rebuild by hand, delete `/data/app/kb.sqlite*` and restart the Pod.
   Before that, `kb-data` was on `nfs-client` and `kb-state` on `local-path`: the NFSv3 mount can't take SQLite's locks (`SQLITE_BUSY` in any journal mode), and the local-path volume pinned the Pod to one node. Don't move SQLite back onto NFS.
 - Changing a PVC's `storageClass` is a manual migration (the field is immutable and the PVCs are `Delete=false`): pause auto-sync (`kubectl -n tomorrow patch application kb-api --type merge -p '{"spec":{"syncPolicy":{"automated":null}}}'`), scale the Deployment to 0, tar `/data/app` out through a temporary Pod, delete both PVCs, `helm template ... -s templates/pvc.yaml | kubectl apply`, add the `argocd.argoproj.io/tracking-id` annotation so Argo adopts them, restore the tar, then push the values change and `kubectl apply -f deploy/argocd/application.yaml` to resume sync. `kb-data` is only a clone: the entrypoint re-clones and unlocks it.
 - `strategy: Recreate` — the SQLite files must not be opened by two Pods.

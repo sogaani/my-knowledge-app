@@ -85,7 +85,7 @@ Mac: kb embed / kb build(→embed)                         k8s API pod（LanceDB
 
 - `similar.json` は `{model, chunker, updatedAt, k, pairs: [[path, other, score], …]}`。score は `1 - cosine 距離` の小数 3 桁。パスとスコアだけで、タイトルや要約は入れない（暗号化ドメインのパスはファイル名として元々平文）。
 - 足切りは `VECTOR_STRONG` と同じ 0.50（距離 0.50〜0.55 の近傍は `low` 相当で、学習ノートの隣に無関係な銘柄が並んだ）。実データ（2026-10-13、194 ノート）では 188 ノートに 935 ペア、score 0.50〜0.997。一括取り込みの本は summary が定型なので本同士が近く出やすい（header chunk に summary が入るため）。
-- `indexNotes` が毎回 `loadSimilar` を呼び、ファイルの mtime + size が `meta.similar_loaded` と違うときだけ `similar` テーブルを入れ替える。API pod の索引は emptyDir で起動ごとに作り直すが、`similar.json` は git にあるので起動時の full index で載る。pod 自身は `KB_EMBED=off` で計算しない。
+- `indexNotes` が毎回 `loadSimilar` を呼び、ファイルの mtime + size が `meta.similar_loaded` と違うときだけ `similar` テーブルを入れ替える。API pod の索引は kb-state ボリュームに永続化され（2026-10-19 まで emptyDir で起動ごとに全再構築）、起動時の増分 index でも `loadSimilar` は走るので、git で届いた新しい `similar.json` はそこで載る。pod 自身は `KB_EMBED=off` で計算しない。
 - 再計算の条件: `embedNotes` で 1 ノートでも埋め込み・削除があったとき、全再構築のとき、またはファイルが無いとき（近傍は他のノートの追加でも変わるので差分更新しない。190 ノートで 1 秒未満）。足切りや K を変えたら `similar.json` を消して `kb build`（または `kb embed --full`）。
 
 ## 運用

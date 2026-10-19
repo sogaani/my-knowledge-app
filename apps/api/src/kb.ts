@@ -1,7 +1,7 @@
 /** Shared KB handle for the API: config, schema registry, index DB, git sync. */
 import { existsSync } from "node:fs";
 import {
-  loadConfig, openDb, indexNotes, SchemaRegistry, git, gitPull, gitHead, gitCommit, gitPush, gitChangedFiles, gitUnpushed, buildGold, lint,
+  loadConfig, openDb, indexNotes, indexIsEmpty, SchemaRegistry, git, gitPull, gitHead, gitCommit, gitPush, gitChangedFiles, gitUnpushed, buildGold, lint,
   LAYOUT, ARTICLES_DIR, type LintReport,
 } from "@kb/core";
 import { env } from "./env";
@@ -41,8 +41,10 @@ export async function sync(reason: string): Promise<{ changed: boolean; head: st
   syncing = serialGit(async () => {
     try {
       if (isGitRepo) {
-        // The index DB lives in an emptyDir and is empty on every start: the first sync must always index,
-        // even when the pull brings nothing new (this used to be checked after lastHead was already set).
+        // The index DB persists on the kb-state volume, so the first sync after a start only re-reads notes whose
+        // mtime differs from the stored row (what this pull and anything a previous pod pulled but never indexed
+        // changed). It is a full walk only when the file is empty: a fresh volume or an INDEX_VERSION reset in openDb.
+        // Must run even when the pull brings nothing new (this used to be checked after lastHead was already set).
         const first = !lastHead;
         // Edits a previous pod wrote but never committed are still on the volume: commit them first.
         if (first && (await git(cfg.root, "status", "--porcelain", "--", LAYOUT.silver, LAYOUT.gold, ARTICLES_DIR))) {
@@ -53,8 +55,9 @@ export async function sync(reason: string): Promise<{ changed: boolean; head: st
         lastHead = after;
         pushState.unpushed = await gitUnpushed(cfg.root); // also picks up commits a previous pod could not push
         if (before !== after || first) {
-          const r = first ? reindex({ full: true }) : await reindexBetween(before, after);
-          console.log(`[sync:${reason}] ${before.slice(0, 7)} -> ${after.slice(0, 7)}${first ? " (full)" : ""}`, r);
+          const full = first && indexIsEmpty(db);
+          const r = first ? reindex({ full }) : await reindexBetween(before, after);
+          console.log(`[sync:${reason}] ${before.slice(0, 7)} -> ${after.slice(0, 7)}${full ? " (full)" : first ? " (resume)" : ""}`, r);
           return { changed: true, head: after };
         }
         return { changed: false, head: after };

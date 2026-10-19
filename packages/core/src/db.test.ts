@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig } from "./config";
-import { indexNotes, openDb } from "./db";
+import { INDEX_VERSION, indexIsEmpty, indexNotes, openDb } from "./db";
 
 describe("indexNotes({ paths })", () => {
   test("re-reads only the given files / folders and drops deleted notes under them", () => {
@@ -39,5 +39,35 @@ describe("indexNotes({ paths })", () => {
     w("200_silver/304_books/c.md", "C");
     expect(indexNotes(cfg, db, { paths: ["200_silver/303_projects", "200_silver/304_books/"] })).toEqual({ added: 1, updated: 1, removed: 1 });
     expect(titles()).toEqual(["B2", "C"]);
+  });
+});
+
+describe("openDb / INDEX_VERSION", () => {
+  test("keeps rows across reopen, drops them when the stored version differs, and a plain reindex refills by mtime", () => {
+    const root = mkdtempSync(join(tmpdir(), "kb-index-"));
+    mkdirSync(join(root, "200_silver/304_books"), { recursive: true });
+    writeFileSync(join(root, "200_silver/304_books/a.md"), "---\ntype: book\ntitle: A\n---\nbody\n");
+    const cfg = loadConfig(root);
+    const count = (db: ReturnType<typeof openDb>) => (db.query("SELECT count(*) n FROM notes").get() as { n: number }).n;
+
+    let db = openDb(cfg);
+    expect(indexIsEmpty(db)).toBe(true);
+    expect(indexNotes(cfg, db)).toEqual({ added: 1, updated: 0, removed: 0 });
+    db.close();
+
+    // same version: the file is reused and an unchanged note is not re-read
+    db = openDb(cfg);
+    expect(indexIsEmpty(db)).toBe(false);
+    expect(count(db)).toBe(1);
+    expect(indexNotes(cfg, db)).toEqual({ added: 0, updated: 0, removed: 0 });
+    db.run("UPDATE meta SET v='0' WHERE k='index_version'");
+    db.close();
+
+    // stale version: everything is dropped and the next incremental index is effectively full
+    db = openDb(cfg);
+    expect(indexIsEmpty(db)).toBe(true);
+    expect((db.query("SELECT v FROM meta WHERE k='index_version'").get() as { v: string }).v).toBe(String(INDEX_VERSION));
+    expect(indexNotes(cfg, db)).toEqual({ added: 1, updated: 0, removed: 0 });
+    db.close();
   });
 });

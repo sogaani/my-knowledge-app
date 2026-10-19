@@ -1,5 +1,5 @@
 # Never let Helm or an Argo CD prune delete these.
-# kb-data: the data repo clone (NFS ok).
+# kb-data: the data repo clone.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -15,7 +15,7 @@ spec:
   storageClassName: {{ . }}
   {{- end }}
 ---
-# kb-state: jobs.sqlite + staging inbox. Must be on storage with real file locks (not NFS).
+# kb-state: jobs.sqlite + kb.sqlite (note index) + staging inbox. Must be on storage with real file locks (not NFS).
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

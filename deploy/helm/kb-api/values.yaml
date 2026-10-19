@@ -15,12 +15,10 @@ persistence:
   repo:
     size: 5Gi
     storageClass: longhorn
-  # /data/app: jobs.sqlite + staging inbox.
+  # /data/app: jobs.sqlite + kb.sqlite (note index, refreshed incrementally across restarts) + staging inbox.
   state:
     size: 1Gi
     storageClass: longhorn
-  # kb.sqlite (note index) lives in an emptyDir and is rebuilt from the notes on every start.
-  indexSizeLimit: 1Gi
 # Cloudflare Access app + worker service token, managed by cloudflare-zero-trust-operator.
 access:
   enabled: true

@@ -38,13 +38,41 @@ CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);
 CREATE TABLE IF NOT EXISTS similar (path TEXT NOT NULL, other TEXT NOT NULL, score REAL NOT NULL, PRIMARY KEY(path, other));
 `;
 
+/**
+ * Bump whenever SCHEMA or what indexNotes extracts per note changes. The index file persists across restarts (Mac:
+ * 900_system/cache, API pod: the kb-state volume) and is only refreshed incrementally by mtime, so without this an old
+ * file would keep serving rows shaped by the previous code. On a mismatch openDb drops every table and the next
+ * indexNotes rebuilds from scratch.
+ */
+export const INDEX_VERSION = 1;
+const INDEX_TABLES = ["notes_fts", "notes", "links", "similar", "meta"];
+
 export function openDb(cfg: KbConfig): Database {
   mkdirSync(dirname(cfg.dbPath), { recursive: true });
   const db = new Database(cfg.dbPath);
   db.exec("PRAGMA journal_mode=WAL");
   db.exec("PRAGMA busy_timeout=5000"); // the worker's search loop and `kb` subprocesses write the same file
-  db.exec(SCHEMA);
+  if (indexVersion(db) !== INDEX_VERSION) {
+    for (const t of INDEX_TABLES) db.exec(`DROP TABLE IF EXISTS ${t}`);
+    db.exec(SCHEMA);
+    db.run("INSERT INTO meta(k,v) VALUES('index_version',?)", [String(INDEX_VERSION)]);
+  } else {
+    db.exec(SCHEMA);
+  }
   return db;
+}
+
+/** Stored INDEX_VERSION, or null for a new file or one from before versioning (no `meta` table / row). */
+function indexVersion(db: Database): number | null {
+  const has = db.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='meta'").get();
+  if (!has) return null;
+  const row = db.query("SELECT v FROM meta WHERE k='index_version'").get() as { v: string } | null;
+  return row ? Number(row.v) : null;
+}
+
+/** True when nothing has been indexed into this file yet (fresh volume or just reset by a version bump). */
+export function indexIsEmpty(db: Database): boolean {
+  return !db.query("SELECT 1 FROM notes LIMIT 1").get();
 }
 
 const LINK_RE = /\]\(([^)\s#]+\.md)(?:#[^)]*)?\)/g;

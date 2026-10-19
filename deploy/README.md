@@ -2,8 +2,8 @@
 
 ```
 Browser ─Cloudflare Access (Google)─▶ Tunnel ─▶ cloudflare-tunnel-ingress-controller ─▶ kb-api Service ─▶ kb-api Pod
-                                                                      /data     kb-data  (NFS)        kb: git clone, git-crypt unlocked
-                                                                      /data/app kb-state (local-path) jobs.sqlite, staging
+                                                                      /data     kb-data  (Longhorn)   kb: git clone, git-crypt unlocked
+                                                                      /data/app kb-state (Longhorn)   jobs.sqlite, staging
                                                                       /cache    emptyDir             kb.sqlite (note index, rebuilt on start)
 Mac worker ─Access service token + WORKER_TOKEN─▶ https://kb.wanawata.com/api/worker/*  (+ POST /api/jobs for launchd schedules)
 ```
@@ -104,8 +104,9 @@ The plist runs the worker through `bash -l`, so the agent CLI (claude/codex/gemi
 ## Notes
 - Data updates never redeploy the Pod: the worker reports a commit, the API `git pull`s and re-indexes. A 5-minute `git fetch` catches manual pushes.
 - On the first sync the pod sits in `CreateContainerConfigError` until the operator has written Secret `kb-worker`; it starts on its own once it exists.
-- SQLite never lives on NFS: the `nfs-client` mount (NFSv3, server-side locking) can't take SQLite's file locks, so it fails with `SQLITE_BUSY` in any journal mode. `jobs.sqlite` is on the `local-path` PVC `kb-state`; the index `kb.sqlite` is in an emptyDir (`KB_DB=/cache/kb.sqlite`).
-- `kb-state` is node-local: the Pod is pinned to the node that holds it. If that node is gone, the job/chat history is lost (notes are safe in git); delete the PVC and the Pod starts fresh elsewhere.
+- Both PVCs are Longhorn volumes (`storageClass: longhorn`, ext4, 3 replicas) since 2026-10-19, so the Pod can run on any node and SQLite's file locks work. `jobs.sqlite` is on `kb-state`; the index `kb.sqlite` stays in an emptyDir (`KB_DB=/cache/kb.sqlite`) because it is rebuilt from the notes on every start anyway.
+  Before that, `kb-data` was on `nfs-client` and `kb-state` on `local-path`: the NFSv3 mount can't take SQLite's locks (`SQLITE_BUSY` in any journal mode), and the local-path volume pinned the Pod to one node. Don't move SQLite back onto NFS.
+- Changing a PVC's `storageClass` is a manual migration (the field is immutable and the PVCs are `Delete=false`): pause auto-sync (`kubectl -n tomorrow patch application kb-api --type merge -p '{"spec":{"syncPolicy":{"automated":null}}}'`), scale the Deployment to 0, tar `/data/app` out through a temporary Pod, delete both PVCs, `helm template ... -s templates/pvc.yaml | kubectl apply`, add the `argocd.argoproj.io/tracking-id` annotation so Argo adopts them, restore the tar, then push the values change and `kubectl apply -f deploy/argocd/application.yaml` to resume sync. `kb-data` is only a clone: the entrypoint re-clones and unlocks it.
 - `strategy: Recreate` — the SQLite files must not be opened by two Pods.
 - The PVCs are annotated `helm.sh/resource-policy: keep` and `argocd.argoproj.io/sync-options: Delete=false`: deleting the Argo app leaves the data.
 - ConfigMap changes restart the Pod (`checksum/config`). Secret changes don't: `kubectl -n my-knowledge rollout restart deploy/kb-api` after rotating the git-crypt key or deploy key.

@@ -6,7 +6,7 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import {
-  LAYOUT, SILVER_PREFIX, SIMILAR_REL, ARTICLES_DIR, loadConfig, git, gitCommitPush, gitStatusPaths, hasUpstream, openDb, indexNotes, parseFilters, search, makeEmbedder, listInbox,
+  LAYOUT, SILVER_PREFIX, SIMILAR_REL, ARTICLES_DIR, loadConfig, git, gitCommitPush, gitPull, gitStatusPaths, openDb, indexNotes, parseFilters, search, makeEmbedder, listInbox,
   clipError, errorHead, buildOpsDigest, formatOpsDigest, renderOpsDigest, type SearchMode,
 } from "@kb/core";
 import { planIngest, ingestCommitMessage, ingestDoneBodies, ingestFailureBodies, type IngestOutcome } from "./ingest-batch";
@@ -62,6 +62,13 @@ async function kb(...args: string[]): Promise<string> {
   if ((await proc.exited) !== 0) throw new Error(`kb ${args[0]}: ${e || o}`);
   return o;
 }
+
+/**
+ * Bring the checkout up to date before a job. `gitPull` rebases with --autostash (edits a refused commit left in the
+ * worktree, or a half-finished manual edit, are stashed around the rebase instead of making the pull fail) and does
+ * nothing for a checkout without an upstream.
+ */
+const pullLatest = () => gitPull(cfg.root, { rebase: true });
 
 /** Silver, Gold and the similar-notes pairs `kb build` (→ embed) rewrote: the API pod reads them from git. */
 async function commitAll(message: string): Promise<string | null> {
@@ -135,7 +142,7 @@ async function runIngest(jobs: Job[]) {
   let bodies: Map<string, Record<string, unknown>>;
   let outcome: IngestOutcome | undefined;
   try {
-    if (await hasUpstream(cfg.root)) await git(cfg.root, "pull", "--rebase", "--quiet").catch((e) => log(lead.id, `pull: ${e.message}\n`));
+    await pullLatest().catch((e) => log(lead.id, `pull: ${e.message}\n`));
     for (const j of jobs) await stageInbox(j);
     const plan = planIngest(jobs.map((j) => ({ id: j.id, scheduled: !!parsePayload(j).scheduled, inbox: j.inbox ?? [] })), listInbox(cfg).map((p) => basename(p)));
     for (const j of jobs.slice(1)) await log(j.id, `bundled with job ${short(lead.id)}: ${jobs.length} ingest jobs, one agent run (log is on the lead job)\n`);
@@ -174,7 +181,7 @@ async function runIngest(jobs: Job[]) {
 }
 
 async function run(job: Job, payload: Record<string, unknown>) {
-  if (job.kind !== "search" && (await hasUpstream(cfg.root))) await git(cfg.root, "pull", "--rebase", "--quiet").catch((e) => log(job.id, `pull: ${e.message}\n`));
+  if (job.kind !== "search") await pullLatest().catch((e) => log(job.id, `pull: ${e.message}\n`));
   let body: Record<string, unknown>;
   try {
     switch (job.kind) {

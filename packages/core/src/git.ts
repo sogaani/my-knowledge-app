@@ -52,13 +52,23 @@ export async function gitStatusPaths(cwd: string, paths: string[]): Promise<{ st
 /** Local commits not on the upstream yet (0 without an upstream). */
 export const gitUnpushed = (cwd: string) => git(cwd, "rev-list", "--count", "@{u}..HEAD").then(Number, () => 0);
 
-/** Stage paths and commit locally. Returns the new HEAD, or null if nothing to commit. */
+/**
+ * Stage paths and commit locally. Returns the new HEAD, or null if nothing to commit.
+ * A refused commit (pre-commit hook) unstages the paths again before rethrowing: the edits stay in the worktree, but a
+ * dirty index would make every following `git pull --rebase` fail and every later commit re-add the same rejected file
+ * (the 2026-10-24 curate output tripped the data repo's digit-run check and took the next two days of jobs with it).
+ */
 export async function gitCommit(cwd: string, paths: string[], message: string, opts: { author?: string } = {}): Promise<string | null> {
   await git(cwd, "add", "-A", "--", ...paths);
   const status = await git(cwd, "status", "--porcelain", "--", ...paths);
   if (!status) return null;
   const authorArgs = opts.author ? ["--author", opts.author] : [];
-  await git(cwd, "commit", "--quiet", "-m", message, ...authorArgs);
+  try {
+    await git(cwd, "commit", "--quiet", "-m", message, ...authorArgs);
+  } catch (e) {
+    await git(cwd, "reset", "--quiet", "--", ...paths).catch(() => {});
+    throw e;
+  }
   return gitHead(cwd);
 }
 

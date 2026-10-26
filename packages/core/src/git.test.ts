@@ -64,3 +64,32 @@ describe("gitStatusPaths", () => {
     expect(r.sort((x, y) => x.status.localeCompare(y.status))).toEqual([{ status: " M", path: "200_silver/既存.md" }, { status: "??", path: "200_silver/新規.md" }]);
   });
 });
+
+describe("gitCommit with a refusing pre-commit hook", () => {
+  test("rethrows the hook's output and leaves nothing staged, so the next pull --rebase still works", async () => {
+    const base = mkdtempSync(join(tmpdir(), "kb-git-"));
+    const remote = join(base, "remote.git");
+    await git(base, "init", "--quiet", "--bare", "-b", "main", remote);
+    const a = await clone(remote, "a");
+    writeFileSync(join(a, "x.md"), "x\n");
+    await gitCommit(a, ["x.md"], "init");
+    await git(a, "push", "--quiet", "-u", "origin", "main");
+    const b = await clone(remote, "b");
+
+    mkdirSync(join(a, "hooks"));
+    writeFileSync(join(a, "hooks", "pre-commit"), "#!/bin/sh\necho 'pre-commit: 47: digits' >&2\nexit 1\n", { mode: 0o755 });
+    await git(a, "config", "core.hooksPath", "hooks");
+    writeFileSync(join(a, "y.md"), "1234567\n");
+    await expect(gitCommit(a, ["y.md"], "add y")).rejects.toThrow(/pre-commit: 47: digits/);
+    expect(await git(a, "diff", "--cached", "--name-only")).toBe("");
+    expect(await gitStatusPaths(a, ["y.md"])).toEqual([{ status: "??", path: "y.md" }]);
+
+    // the remote moves; the dirty worktree no longer blocks the pull (autostash) and the edit survives it
+    writeFileSync(join(b, "z.md"), "z\n");
+    await gitCommit(b, ["z.md"], "add z");
+    await gitPush(b);
+    const { before, after } = await gitPull(a, { rebase: true });
+    expect(before).not.toBe(after);
+    expect(await gitStatusPaths(a, ["y.md", "z.md"])).toEqual([{ status: "??", path: "y.md" }]);
+  });
+});

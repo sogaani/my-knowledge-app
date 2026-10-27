@@ -4,8 +4,8 @@
  * input (every candidate with its title and ≤ 200 chars of summary, the user's interests, and what happened to earlier
  * picks), hands it to the `curate` skill, which answers with JSON only (`{ picks: [{ id, basis, reason, topics }] }`),
  * and writes the day's file `900_system/articles/YYYY-MM-DD.json` with every candidate (picked or not). The WebUI shows
- * the picks, records `opened` when a link is clicked and `saved` / `dismissed` from the buttons; those reactions feed
- * the next run's `history`. Picks come in two kinds: `fit` (matches the interests / history) and `general` (worth
+ * the picks, records `opened` when a link is clicked and `later` / `saved` / `dismissed` from the buttons (`done` closes
+ * a `later` item without a note); those reactions feed the next run's `history`. Picks come in two kinds: `fit` (matches the interests / history) and `general` (worth
  * reading whatever the history says — the quota that keeps the loop from narrowing onto what was clicked before).
  */
 import { createHash } from "node:crypto";
@@ -35,9 +35,14 @@ const TOPICS_MAX = 5;
 const IGNORED_AFTER_DAYS = 2;
 
 export type ArticleBasis = "fit" | "general";
-/** opened = the link was clicked (automatic); saved = sent to the inbox for ingest; dismissed = not interested. */
-export type ArticleReaction = "opened" | "saved" | "dismissed";
-export const ARTICLE_REACTIONS: ArticleReaction[] = ["opened", "saved", "dismissed"];
+/**
+ * opened = the link was clicked (automatic); later = queued to read later (stays until one of the next three);
+ * saved = sent to the inbox for ingest; dismissed = not interested; done = read, no note wanted (only from `later`).
+ * Nothing expires on its own: a queued article waits until the user reads or drops it.
+ */
+export type ArticleReaction = "opened" | "later" | "saved" | "dismissed" | "done";
+export const ARTICLE_REACTIONS: ArticleReaction[] = ["opened", "later", "saved", "dismissed", "done"];
+export type ArticleState = Exclude<ArticleReaction, "opened">;
 
 export interface ArticleItem {
   /** From the URL's sha256 (`articleId`): stable across days and feeds. */
@@ -55,8 +60,10 @@ export interface ArticleItem {
   reason?: string;
   topics?: string[];
   opened_at?: string;
-  reaction?: "saved" | "dismissed";
+  reaction?: ArticleState;
   reacted_at?: string;
+  /** When it entered the read-later queue (kept after saved / dismissed / done, so "queued on" survives). */
+  later_at?: string;
 }
 
 export interface ArticleDay {
@@ -84,12 +91,14 @@ const DEFAULT_PREFS: ArticlePrefs = { max_per_day: 8, explore_min: 2, interests:
 export interface ArticleHistory {
   /** Days of data behind the counts. */
   days: number;
-  /** Per feed slug: how its picks fared, and how many unpicked entries were opened anyway (`missed`). */
-  feeds: Record<string, { candidates: number; picked: number; opened: number; saved: number; dismissed: number; missed: number }>;
+  /** Per feed slug: how its picks fared, and how many unpicked entries were opened anyway (`missed`). `later` counts the
+   * ones still queued or finished from the queue (`done`), i.e. wanted even when not opened the same morning. */
+  feeds: Record<string, { candidates: number; picked: number; opened: number; later: number; saved: number; dismissed: number; missed: number }>;
   /** The same per pick kind, to see whether the exploration quota earns its place. */
-  basis: Record<ArticleBasis, { picked: number; opened: number; saved: number; dismissed: number }>;
-  /** Recent titles (`title (feed)`), newest first, each list capped. */
+  basis: Record<ArticleBasis, { picked: number; opened: number; later: number; saved: number; dismissed: number }>;
+  /** Recent titles (`title (feed)`), newest first, each list capped. `later` = queued to read later (interest, like saved). */
   opened: string[];
+  later: string[];
   saved: string[];
   dismissed: string[];
   /** Opened although not picked: what the curation missed. */
@@ -150,16 +159,25 @@ export function loadArticlePrefs(cfg: KbConfig): ArticlePrefs {
   return { max_per_day: num(raw.max_per_day, DEFAULT_PREFS.max_per_day), explore_min: num(raw.explore_min, DEFAULT_PREFS.explore_min), interests: list(raw.interests), avoid: list(raw.avoid) };
 }
 
-/** Counts for a day's heading, the digest and Gold. */
-export function articleStats(day: Pick<ArticleDay, "items">): { candidates: number; picked: number; opened: number; saved: number; dismissed: number } {
-  const s = { candidates: day.items.length, picked: 0, opened: 0, saved: 0, dismissed: 0 };
+/** Counts for a day's heading, the digest and Gold. `later` = still queued; `done` = read from the queue. */
+export function articleStats(day: Pick<ArticleDay, "items">): { candidates: number; picked: number; opened: number; later: number; saved: number; dismissed: number; done: number } {
+  const s = { candidates: day.items.length, picked: 0, opened: 0, later: 0, saved: 0, dismissed: 0, done: 0 };
   for (const it of day.items) {
     if (it.picked) s.picked++;
     if (it.opened_at) s.opened++;
+    if (it.reaction === "later") s.later++;
     if (it.reaction === "saved") s.saved++;
     if (it.reaction === "dismissed") s.dismissed++;
+    if (it.reaction === "done") s.done++;
   }
   return s;
+}
+
+/** The read-later queue across every day file, oldest queued first. Nothing drops out by age. */
+export function listLaterArticles(cfg: KbConfig): { date: string; item: ArticleItem }[] {
+  const out: { date: string; item: ArticleItem }[] = [];
+  for (const d of listArticleDays(cfg)) for (const item of d.items) if (item.reaction === "later") out.push({ date: d.date, item });
+  return out.sort((a, b) => (a.item.later_at ?? a.date).localeCompare(b.item.later_at ?? b.date));
 }
 
 const isRssFeed = (m: BronzeMeta) => m.kind === "feed" && /^collect-rss-/.test(m.source);
@@ -213,17 +231,19 @@ export function buildHistory(days: ArticleDay[], opts: { days?: number; now?: Da
   const span = opts.days ?? HISTORY_DAYS;
   const since = localDate(new Date(now.getTime() - span * 86400_000).toISOString());
   const staleBefore = localDate(new Date(now.getTime() - IGNORED_AFTER_DAYS * 86400_000).toISOString());
-  const h: ArticleHistory = { days: span, feeds: {}, basis: { fit: zero(), general: zero() }, opened: [], saved: [], dismissed: [], missed: [], ignored: [] };
+  const h: ArticleHistory = { days: span, feeds: {}, basis: { fit: zero(), general: zero() }, opened: [], later: [], saved: [], dismissed: [], missed: [], ignored: [] };
   const label = (it: ArticleItem) => `${it.title} (${it.feed})`;
   const push = (list: string[], it: ArticleItem) => { if (list.length < HISTORY_TITLES) list.push(label(it)); };
   for (const d of [...days].sort((a, b) => b.date.localeCompare(a.date))) {
     if (d.date < since) continue;
     for (const it of d.items) {
-      const f = (h.feeds[it.feed] ??= { candidates: 0, picked: 0, opened: 0, saved: 0, dismissed: 0, missed: 0 });
+      const f = (h.feeds[it.feed] ??= { candidates: 0, picked: 0, opened: 0, later: 0, saved: 0, dismissed: 0, missed: 0 });
       f.candidates++;
       const b = it.picked ? h.basis[it.basis ?? "fit"] : null;
       if (it.picked) { f.picked++; b!.picked++; }
       if (it.opened_at) { f.opened++; if (b) b.opened++; push(h.opened, it); if (!it.picked) { f.missed++; push(h.missed, it); } }
+      // queued, or read from the queue: wanted. A later → saved / dismissed item is counted under its final state only.
+      if (it.reaction === "later" || it.reaction === "done") { f.later++; if (b) b.later++; push(h.later, it); }
       if (it.reaction === "saved") { f.saved++; if (b) b.saved++; push(h.saved, it); }
       if (it.reaction === "dismissed") { f.dismissed++; if (b) b.dismissed++; push(h.dismissed, it); }
       if (it.picked && !it.opened_at && !it.reaction && d.date <= staleBefore) push(h.ignored, it);
@@ -231,7 +251,7 @@ export function buildHistory(days: ArticleDay[], opts: { days?: number; now?: Da
   }
   return h;
 }
-const zero = () => ({ picked: 0, opened: 0, saved: 0, dismissed: 0 });
+const zero = () => ({ picked: 0, opened: 0, later: 0, saved: 0, dismissed: 0 });
 
 /** Titles and tags of the active plaintext learning / theme / project notes: what the user is working on right now. */
 export function interestsFromNotes(db: Database, max = 40): string[] {
@@ -360,20 +380,34 @@ export function reactToArticle(cfg: KbConfig, o: { date: string; id: string; rea
   if (!day || !item) throw new Error(`article ${o.id} not found in ${articlePath(o.date)}`);
   const at = (o.now ?? new Date()).toISOString();
   if (o.reaction === "opened") item.opened_at ??= at;
-  else { item.reaction = o.reaction; item.reacted_at = at; }
+  else if (o.reaction === "done" && item.reaction !== "later") throw new Error(`article ${o.id}: done is only for an article queued with later`);
+  else {
+    if (o.reaction === "later") item.later_at ??= at;
+    item.reaction = o.reaction;
+    item.reacted_at = at;
+  }
   return { path: writeArticleDay(cfg, day), item };
 }
 
-/** Gold 309: the last two weeks of picks with how each fared (◎ saved, ○ opened, × dismissed). */
+const GOLD_MARK: Record<ArticleState, string> = { later: "☆ ", saved: "◎ ", dismissed: "× ", done: "✓ " };
+const mdDate = (iso: string) => { const [, m, d] = iso.slice(0, 10).split("-"); return `${Number(m)}/${Number(d)}`; };
+
+/** Gold 309: the read-later queue (every day), then the last two weeks of picks with how each fared. */
 export function renderArticlesGold(cfg: KbConfig, days = 14): string {
-  const lines = ["# 記事", "", "RSS の新着から `curate` ジョブが毎朝選んだ記事。全候補と反応は `900_system/articles/YYYY-MM-DD.json`、表示と反応の記録は WebUI の「記事」タブ。◎ 取り込んだ · ○ 開いた · × 興味なし", ""];
+  const lines = ["# 記事", "", "RSS の新着から `curate` ジョブが毎朝選んだ記事。全候補と反応は `900_system/articles/YYYY-MM-DD.json`、表示と反応の記録は WebUI の「記事」タブ。☆ 後で読む · ◎ 取り込んだ · ✓ 読んだ · ○ 開いた · × 興味なし", ""];
   const list = listArticleDays(cfg, { limit: days });
   if (!list.length) return [...lines, "（まだありません。`kb articles curate` が作ります）"].join("\n");
+  const later = listLaterArticles(cfg);
+  if (later.length) {
+    lines.push(`## 後で読む（${later.length} 件）`, "", "期限で消えない。読んだら WebUI で「取り込む」「読んだ」「興味なし」のどれかを押す。", "");
+    for (const { item: it } of later) lines.push(`- [${it.title}](${it.url}) — ${it.feed} — ${mdDate(it.later_at ?? "")} から${it.opened_at ? "・開いた" : ""}${it.reason ? ` — ${it.reason}` : ""}`);
+    lines.push("");
+  }
   for (const d of list) {
     const s = articleStats(d);
     lines.push(`## ${d.date}（${s.picked} 件 / 候補 ${s.candidates} 件）`, "");
     for (const it of d.items.filter((i) => i.picked)) {
-      const mark = it.reaction === "saved" ? "◎ " : it.reaction === "dismissed" ? "× " : it.opened_at ? "○ " : "";
+      const mark = it.reaction ? GOLD_MARK[it.reaction] : it.opened_at ? "○ " : "";
       lines.push(`- ${mark}[${it.title}](${it.url}) — ${it.feed}${it.basis === "general" ? "・一般" : ""}${it.reason ? ` — ${it.reason}` : ""}`);
     }
     lines.push("");

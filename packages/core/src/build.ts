@@ -9,7 +9,7 @@ import { currencyOf, formatMoney, formatTotals, monthlyByCurrency } from "./mone
 import { RECOMMENDATION_TYPE, currentRecommendation, parseSuggestions, readSuggestionBody, suggestionCounts } from "./suggest";
 import { IMPORTED_SUMMARY, bookDate, bookYear, unratedImported } from "./books";
 import { renderResurface, renderResurfaceHome, resurface } from "./resurface";
-import { renderArticlesGold } from "./articles";
+import { listLaterArticles, renderArticlesGold } from "./articles";
 
 /** Regenerate every Gold markdown file from the index. Gold is derived; never hand-edited. */
 export function buildGold(cfg: KbConfig, db: Database): string[] {
@@ -205,6 +205,7 @@ export function buildGold(cfg: KbConfig, db: Database): string[] {
 
   // 300 home
   const reviews = q("type=review", { orderBy: "-updated", limit: 5 });
+  const laterCount = listLaterArticles(cfg).length;
   // recent: plaintext notes only; encrypted domains (git-crypt) appear as per-domain counts so their titles / summaries stay out of this plaintext file
   const silverByUpdated = runQuery(db, { filters: [], orderBy: "-updated", limit: 10000 }).filter((n) => !n.path.startsWith(GOLD_PREFIX));
   const recent = silverByUpdated.filter((n) => !isEncryptedPath(n.path)).slice(0, 15);
@@ -224,7 +225,7 @@ export function buildGold(cfg: KbConfig, db: Database): string[] {
     `- [プロジェクト](${GOLD.projects}) — 進行中 ${pBy.active?.length ?? 0}${workActive ? `（仕事 ${workActive}）` : ""}`,
     `- [学習](${GOLD.learning}/index.md)`,
     `- [おすすめ](${GOLD.suggestions})`,
-    `- [記事](${GOLD.articles}) — RSS から毎朝選んだ記事`,
+    `- [記事](${GOLD.articles}) — RSS から毎朝選んだ記事${laterCount ? `・後で読む ${laterCount} 件` : ""}`,
     `- [売買シート](${GOLD.trading})${plans.length ? ` — 最新 ${plans[0].fm.date ?? plans[0].updated}` : ""}`,
     `- [市場メモ](${GOLD.market}) — 銘柄・テーマ・カタリスト`,
     `- [健康記録](${GOLD.health})`,

@@ -12,7 +12,7 @@ import { formatDays, loadTokenDays, type TokenDays } from "./collect/tokens";
 import type { Database } from "bun:sqlite";
 import { SILVER_PREFIX, type KbConfig } from "./config";
 import { resurface, splitEncrypted, type ResurfaceEntry } from "./resurface";
-import { articleStats, listArticleDays } from "./articles";
+import { articleStats, listArticleDays, listLaterArticles } from "./articles";
 
 export interface CollectSourceSummary {
   id: string;
@@ -46,7 +46,7 @@ export interface OpsDigest {
   /** Notes to look at again today (resurface.ts, the same list as Gold 393); null when the digest was built without the index. */
   review: { due: number; onThisDay: number; /** plaintext entries only (the digest text is stored in the API's job table) */ top: ResurfaceEntry[] } | null;
   /** The latest article day before today (articles.ts): how yesterday's picks fared. Null = no day file yet. */
-  articles: { date: string; picked: number; opened: number; saved: number; dismissed: number } | null;
+  articles: { date: string; picked: number; opened: number; saved: number; dismissed: number; /** read-later queue, every day */ later?: number } | null;
 }
 
 /** Collapse an HTTP error body (often a Cloudflare HTML page) to one line of at most `max` characters. */
@@ -158,7 +158,8 @@ function articlesSummary(cfg: KbConfig, today: string): OpsDigest["articles"] {
   const d = listArticleDays(cfg, { limit: 1, before: today })[0];
   if (!d) return null;
   const s = articleStats(d);
-  return { date: d.date, picked: s.picked, opened: s.opened, saved: s.saved, dismissed: s.dismissed };
+  const later = listLaterArticles(cfg).length;
+  return { date: d.date, picked: s.picked, opened: s.opened, saved: s.saved, dismissed: s.dismissed, ...(later ? { later } : {}) };
 }
 function reviewSummary(db: Database, date: string): OpsDigest["review"] {
   const r = resurface(db, date);
@@ -202,7 +203,7 @@ function reviewLine(r: NonNullable<OpsDigest["review"]>): string {
 /** "記事 10/14: ピック 8 · 開いた 3 · 取り込み 1" — whether the picks are being read (the WebUI 記事 tab has the list). */
 function articlesLine(a: NonNullable<OpsDigest["articles"]>): string {
   const [, m, day] = a.date.split("-");
-  return `記事 ${Number(m)}/${Number(day)}: ピック ${a.picked} · 開いた ${a.opened} · 取り込み ${a.saved}${a.dismissed ? ` · 興味なし ${a.dismissed}` : ""}`;
+  return `記事 ${Number(m)}/${Number(day)}: ピック ${a.picked} · 開いた ${a.opened} · 取り込み ${a.saved}${a.dismissed ? ` · 興味なし ${a.dismissed}` : ""}${a.later ? ` · 後で読む ${a.later}` : ""}`;
 }
 function collectLine(d: OpsDigest): string {
   if (!d.collect.length) return "収集: 記録なし";

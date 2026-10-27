@@ -5,7 +5,7 @@ import { basename, join } from "node:path";
 import {
   runQuery, parseFilters, readNote, patchFrontmatter, createNote, DuplicateError, extractLinks, currentRecommendation, reactToSuggestion, REACTIONS,
   keywordSearch, monthlyByCurrency, errorHead, similarNotes, neighborNotes, noteHeads, resurface, LAYOUT, SILVER_PREFIX, GOLD_PREFIX, type SearchResponse, type SearchMode, type Reaction,
-  listArticleDays, reactToArticle, ARTICLE_REACTIONS, type ArticleReaction,
+  listArticleDays, listLaterArticles, reactToArticle, ARTICLE_REACTIONS, type ArticleReaction,
 } from "@kb/core";
 import { env } from "./env";
 import { authenticate, requireUser, requireWorker, requireUserOrWorker, type Principal } from "./auth";
@@ -246,8 +246,10 @@ api.post("/suggestions/react", requireUser, async (c) => {
 /**
  * Articles: the daily RSS picks (900_system/articles/<date>.json, written by the curate job on the Mac). Newest day
  * first, `before` (a date) pages back. Reactions are written into the day file and committed like a note edit;
- * `saved` also queues the URL for ingest, the same as dropping it on the 投げ込み page.
+ * `saved` also queues the URL for ingest, the same as dropping it on the 投げ込み page. `/articles/later` is the
+ * read-later queue across every day (oldest first; it never expires, `saved` / `dismissed` / `done` clear an entry).
  */
+api.get("/articles/later", requireUser, (c) => c.json({ items: listLaterArticles(cfg) }));
 api.get("/articles", requireUser, (c) => {
   const limit = Math.max(1, Math.min(30, Number(c.req.query("limit") ?? 1) || 1));
   const before = c.req.query("before") || undefined;
@@ -258,7 +260,7 @@ api.post("/articles/react", requireUser, async (c) => {
   const { date, id, reaction } = (await c.req.json()) as { date?: string; id?: string; reaction?: ArticleReaction };
   if (!date || !id || !reaction || !ARTICLE_REACTIONS.includes(reaction)) return c.json({ error: `date, id and reaction (${ARTICLE_REACTIONS.join(" | ")}) required` }, 400);
   let r: ReturnType<typeof reactToArticle>;
-  try { r = reactToArticle(cfg, { date, id, reaction }); } catch (e) { return c.json({ error: (e as Error).message }, 404); }
+  try { r = reactToArticle(cfg, { date, id, reaction }); } catch (e) { const m = (e as Error).message; return c.json({ error: m }, /not found/.test(m) ? 404 : 400); }
   const commit = await timed(c, "index", () => commitKb([r.path], `web: article ${id} ${reaction}`));
   const job = reaction === "saved" ? queueUrlIngest(r.item.url) : null;
   return c.json({ ok: true, item: r.item, job, commit });

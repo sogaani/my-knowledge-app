@@ -6,7 +6,7 @@ import { loadConfig } from "./config";
 import { readMeta, walkBronze } from "./bronze";
 import {
   ARTICLES_DIR, CURATE_OUTPUT_REL, applyCurateOutput, articleId, articleStats, buildCurateInput, buildHistory, collectCandidates, curateArticles,
-  knownArticleIds, listArticleDays, loadArticlePrefs, parseCurateOutput, reactToArticle, renderArticlesGold, writeArticleDay, type ArticleDay, type ArticleItem,
+  knownArticleIds, listArticleDays, listLaterArticles, loadArticlePrefs, parseCurateOutput, reactToArticle, renderArticlesGold, writeArticleDay, type ArticleDay, type ArticleItem,
 } from "./articles";
 
 /** A throwaway data repo (fixture only: made-up feeds). */
@@ -52,9 +52,9 @@ describe("buildHistory", () => {
   ];
   test("counts per feed and per basis, lists titles, flags missed and ignored", () => {
     const h = buildHistory(days, { now: new Date("2026-10-16T09:00:00+09:00") });
-    expect(h.feeds.f).toEqual({ candidates: 4, picked: 4, opened: 1, saved: 0, dismissed: 1, missed: 0 });
-    expect(h.feeds.g).toEqual({ candidates: 2, picked: 1, opened: 2, saved: 1, dismissed: 0, missed: 1 });
-    expect(h.basis.general).toEqual({ picked: 2, opened: 1, saved: 1, dismissed: 1 });
+    expect(h.feeds.f).toEqual({ candidates: 4, picked: 4, opened: 1, later: 0, saved: 0, dismissed: 1, missed: 0 });
+    expect(h.feeds.g).toEqual({ candidates: 2, picked: 1, opened: 2, later: 0, saved: 1, dismissed: 0, missed: 1 });
+    expect(h.basis.general).toEqual({ picked: 2, opened: 1, later: 0, saved: 1, dismissed: 1 });
     expect(h.opened).toEqual(["p1 (f)", "m1 (g)", "s1 (g)"]);
     expect(h.missed).toEqual(["m1 (g)"]);
     expect(h.saved).toEqual(["s1 (g)"]);
@@ -121,7 +121,7 @@ describe("curateArticles end to end", () => {
     expect(day.items[0]!.url).toBe("https://a.example/1");
     const meta = [...walkBronze(cfg)][0]!;
     expect(meta.processed_to).toEqual([r.path!]);
-    expect(articleStats(day)).toEqual({ candidates: 3, picked: 2, opened: 0, saved: 0, dismissed: 0 });
+    expect(articleStats(day)).toEqual({ candidates: 3, picked: 2, opened: 0, later: 0, saved: 0, dismissed: 0, done: 0 });
     expect(existsSync(join(root, CURATE_OUTPUT_REL))).toBe(true);
 
     // the same day again with one more feed: already-seen urls are not offered, earlier items (and reactions) survive
@@ -184,5 +184,49 @@ describe("reactToArticle / listing / Gold", () => {
     const input = buildCurateInput(cfg, [item({ title: "t", url: "u", summary: "s" })], { date: "2026-10-15", prefs: { max_per_day: 5, explore_min: 2, interests: ["Rust"], avoid: [] } });
     expect(input).toMatchObject({ date: "2026-10-15", max: 5, explore_min: 2, interests: ["Rust"], items: [{ title: "t", feed: "f", summary: "s" }] });
     expect(input.history.days).toBe(90);
+  });
+});
+
+describe("read-later queue", () => {
+  test("later queues across days (oldest first), done only from later, saved / dismissed / done clear it, nothing expires", () => {
+    const root = fixtureRoot(); const cfg = loadConfig(root);
+    const mk = (date: string, titles: string[]) => writeArticleDay(cfg, { date, curated_at: "", feeds: ["f"], items: titles.map((t, i) => item({ title: t, url: `https://x/${date}/${i}`, picked: i === 0, basis: "fit", reason: "why" })) });
+    for (const d of ["2026-09-01", "2026-10-13", "2026-10-14"]) mk(d, ["first", "second"]);
+    const at = (s: string) => new Date(s);
+    const old = articleId("https://x/2026-09-01/0"), newer = articleId("https://x/2026-10-14/1"), other = articleId("https://x/2026-10-13/0");
+
+    expect(() => reactToArticle(cfg, { date: "2026-10-13", id: other, reaction: "done" })).toThrow(/only for an article queued with later/);
+    reactToArticle(cfg, { date: "2026-10-14", id: newer, reaction: "later", now: at("2026-10-14T09:00:00Z") });
+    const q1 = reactToArticle(cfg, { date: "2026-09-01", id: old, reaction: "later", now: at("2026-10-14T10:00:00Z") });
+    expect(q1.item).toMatchObject({ reaction: "later", later_at: "2026-10-14T10:00:00.000Z", reacted_at: "2026-10-14T10:00:00.000Z" });
+    // order is by when it was queued, not by the day file; a 6-week-old day is still there
+    expect(listLaterArticles(cfg).map((e) => `${e.date}/${e.item.title}`)).toEqual(["2026-10-14/second", "2026-09-01/first"]);
+    // a second "later" keeps the original queue time
+    expect(reactToArticle(cfg, { date: "2026-09-01", id: old, reaction: "later", now: at("2026-10-20T10:00:00Z") }).item.later_at).toBe("2026-10-14T10:00:00.000Z");
+
+    const gold = renderArticlesGold(cfg);
+    expect(gold).toContain("## 後で読む（2 件）");
+    expect(gold.indexOf("## 後で読む")).toBeLessThan(gold.indexOf("## 2026-10-14"));
+    expect(gold).toContain("- [second](https://x/2026-10-14/1) — f — 10/14 から");
+    expect(gold).toContain("- ☆ [first](https://x/2026-09-01/0) — f — why");
+    const h = buildHistory(listArticleDays(cfg), { now: at("2026-10-15T00:00:00Z") });
+    expect(h.later).toEqual(["second (f)", "first (f)"]);
+    expect(h.feeds.f).toMatchObject({ later: 2, saved: 0 });
+
+    // done: read from the queue, no note; keeps later_at; counted as later (wanted) in the history
+    const d = reactToArticle(cfg, { date: "2026-09-01", id: old, reaction: "done", now: at("2026-10-21T10:00:00Z") });
+    expect(d.item).toMatchObject({ reaction: "done", later_at: "2026-10-14T10:00:00.000Z", reacted_at: "2026-10-21T10:00:00.000Z" });
+    expect(listLaterArticles(cfg).map((e) => e.item.title)).toEqual(["second"]);
+    expect(articleStats(listArticleDays(cfg, { limit: 1, before: "2026-10-01" })[0]!)).toMatchObject({ later: 0, done: 1 });
+    expect(renderArticlesGold(cfg)).toContain("- ✓ [first](https://x/2026-09-01/0)");
+    expect(buildHistory(listArticleDays(cfg), { now: at("2026-10-22T00:00:00Z") }).feeds.f).toMatchObject({ later: 2 });
+
+    // saved from the queue clears it and counts under saved only
+    const sv = reactToArticle(cfg, { date: "2026-10-14", id: newer, reaction: "saved", now: at("2026-10-22T10:00:00Z") });
+    expect(sv.item).toMatchObject({ reaction: "saved", later_at: "2026-10-14T09:00:00.000Z" });
+    expect(listLaterArticles(cfg)).toEqual([]);
+    expect(renderArticlesGold(cfg)).not.toContain("## 後で読む");
+    expect(buildHistory(listArticleDays(cfg), { now: at("2026-10-23T00:00:00Z") }).feeds.f).toMatchObject({ later: 1, saved: 1 });
+    expect(() => reactToArticle(cfg, { date: "2026-10-14", id: newer, reaction: "done" })).toThrow(/only for an article queued with later/);
   });
 });

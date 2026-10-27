@@ -19,10 +19,14 @@ export interface Resurface { date: string; due: ResurfaceEntry[]; onThisDay: Res
 /** read = will read / watch; done = already read / watched; dismissed = not interested. */
 export type Reaction = "read" | "done" | "dismissed";
 /** One RSS entry of a curated day. `picked` ones carry `basis` (fit = matches the interests / history, general = worth reading regardless), reason and topics. */
-export interface ArticleItem { id: string; title: string; url: string; feed: string; published: string | null; summary: string; picked: boolean; basis?: "fit" | "general"; reason?: string; topics?: string[]; opened_at?: string; reaction?: "saved" | "dismissed"; reacted_at?: string }
+export type ArticleState = "later" | "saved" | "dismissed" | "done";
+export interface ArticleItem { id: string; title: string; url: string; feed: string; published: string | null; summary: string; picked: boolean; basis?: "fit" | "general"; reason?: string; topics?: string[]; opened_at?: string; reaction?: ArticleState; reacted_at?: string; later_at?: string }
 export interface ArticleDay { date: string; curated_at: string; feeds: string[]; items: ArticleItem[]; warnings?: string[] }
-/** opened = the link was clicked (recorded automatically); saved = sent to the inbox for ingest; dismissed = not interested. */
-export type ArticleReaction = "opened" | "saved" | "dismissed";
+/**
+ * opened = the link was clicked (recorded automatically); later = read-later queue (stays until one of the next three);
+ * saved = sent to the inbox for ingest; dismissed = not interested; done = read, no note (only from later).
+ */
+export type ArticleReaction = "opened" | "later" | "saved" | "dismissed" | "done";
 export interface Job { id: string; kind: string; status: "queued" | "running" | "done" | "failed"; payload: string; result: string | null; log: string; commit: string | null; created_at: string; started_at: string | null; finished_at: string | null }
 /** `sources`: JSON array of note paths (the ask skill's 根拠); `sourceNotes`: the same resolved to titles by the API. */
 export interface ChatMessage { id: string; role: "user" | "assistant"; text: string; sources: string; sourceNotes?: NoteHead[]; job_id: string | null; created_at: string }
@@ -63,6 +67,8 @@ export const api = {
   react: (body: { id: string; reaction: Reaction }) => req<{ ok: boolean; created: string | null; existing: string | null }>("/suggestions/react", { method: "POST", body: JSON.stringify(body) }),
   /** Curated days, newest first; `before` (a date) pages back. `next` is the cursor for the following page. */
   articles: (p: { limit?: number; before?: string } = {}) => req<{ items: ArticleDay[]; next: string | null }>(`/articles?${new URLSearchParams({ ...(p.limit ? { limit: String(p.limit) } : {}), ...(p.before ? { before: p.before } : {}) })}`),
+  /** The read-later queue across every day, oldest first. */
+  articlesLater: () => req<{ items: { date: string; item: ArticleItem }[] }>("/articles/later"),
   articleReact: (body: { date: string; id: string; reaction: ArticleReaction }) => req<{ ok: boolean; item: ArticleItem; job: Job | null }>("/articles/react", { method: "POST", body: JSON.stringify(body) }),
   inboxJson: (body: { url?: string; text?: string; title?: string }) => req<{ job: Job }>("/inbox", { method: "POST", body: JSON.stringify(body) }),
   inboxForm: async (form: FormData) => { const r = await fetch("/api/inbox", { method: "POST", body: form }); if (!r.ok) throw new Error(await r.text()); return r.json() as Promise<{ job: Job }>; },

@@ -66,16 +66,16 @@ kb articles curate [--date d] [--dry] [--json]
        collector が記事ページを取って Readability の本文冒頭 300 字を要約にする（`summary_source: "page"`、1 回の実行で 40 ページまで・同時 4・失敗したホストは再試行しない）。
        スキルは WebFetch / kb ingest <url> を禁止）
      - interests = 900_system/article-prefs.json の interests + active な learning / theme / project の題名とタグ（暗号化ドメインは除外）
-     - history = 過去 90 日の 900_system/articles/*.json の集計（フィード別の picked / opened / saved / dismissed / missed、fit / general 別、
-       最近 開いた・取り込んだ・興味なし・取りこぼし（選ばれなかったのに開いた）・無視（選んだのに 2 日以上開かれない）の題名、各 30 件まで）
+     - history = 過去 90 日の 900_system/articles/*.json の集計（フィード別の picked / opened / later / saved / dismissed / missed、fit / general 別、
+       最近 開いた・後で読む（読んだを含む）・取り込んだ・興味なし・取りこぼし（選ばれなかったのに開いた）・無視（選んだのに 2 日以上開かれない）の題名、各 30 件まで）
   3. run-agent.sh curate <in> <out>（effort medium）。スキルは 900_system/cache/curate-out.json に { picks: [{ id, basis, reason, topics }] } だけを書く
   4. 検証: id は入力にあるものだけ（捏造不可）、max 件まで（超過は fit から落とす）、general が explore_min 件未満なら warnings に残す
   5. 900_system/articles/<date>.json に全候補（picked: true/false、選定理由、basis）を書き、関係した Bronze の processed_to にそのパスを入れる
 ```
 
 - **basis**: `fit` は履歴・興味に合うもの、`general` は履歴を見ずに「分野を問わず読む価値がある」もの。`general` を最低 `explore_min` 件（既定 2）入れるのは、開いたものに寄っていく確証バイアスのループを避けるため。履歴の集計も fit / general 別に出るので、一般枠が開かれているかを見て `article-prefs.json` で枠を調整できる。
-- **反応**（WebUI「記事」タブ → `POST /api/articles/react`、day file に書いて commit）: リンクを開くと `opened_at`（自動）、「取り込む」は `reaction: saved` + その URL を inbox 投入（通常の ingest ジョブ。web として Silver になる）、「興味なし」は `reaction: dismissed`。選ばれなかった候補も「その他の候補」から開けて、それは `missed`（取りこぼし）として次回に効く。
-- **置き場**: `900_system/articles/YYYY-MM-DD.json`（git 管理。Silver ノートにはしない: 日次 70 件規模の運用データで、集計はアプリが読む）。Gold `309_articles.md` は直近 14 日の選定と反応（◎ 取り込んだ / ○ 開いた / × 興味なし）。`kb lint` の Bronze 表では rss フィードは `silver` 側に数えられる（processed_to が day file）。
+- **反応**（WebUI「記事」タブ → `POST /api/articles/react`、day file に書いて commit）: リンクを開くと `opened_at`（自動）、「後で」は `reaction: later`（`later_at` を記録。後で読むキュー = `GET /api/articles/later` / `kb articles later`。期限で消えず、「取り込む」「読んだ」「興味なし」のどれかで抜ける）、「取り込む」は `reaction: saved` + その URL を inbox 投入（通常の ingest ジョブ。web として Silver になる）、「読んだ」は `reaction: done`（キューの中だけにあるボタン。ノートにしない。履歴では later と同じ「関心あり」）、「興味なし」は `reaction: dismissed`。選ばれなかった候補も「その他の候補」から開けて、それは `missed`（取りこぼし）として次回に効く。
+- **置き場**: `900_system/articles/YYYY-MM-DD.json`（git 管理。Silver ノートにはしない: 日次 70 件規模の運用データで、集計はアプリが読む）。Gold `309_articles.md` は後で読むキュー（全期間）と直近 14 日の選定と反応（☆ 後で読む / ◎ 取り込んだ / ✓ 読んだ / ○ 開いた / × 興味なし）。`kb lint` の Bronze 表では rss フィードは `silver` 側に数えられる（processed_to が day file）。
 - **運用**: `kb articles curate --dry` で入力をそのまま見られる（暗号化ドメインの題名が入っていないことの確認もここ）。`kb articles history` が集計、`kb articles stats` が日別の件数。朝のダイジェストには前日分の「記事 M/D: ピック N · 開いた M · 取り込み K」が 1 行入る。curate ジョブが成功して 1 件以上選ぶと push「今日の記事 N 件」（`/articles`）。新着が無い日はファイルを作らず、空のフィードは `processed: -`。
 
 ## メールの前処理（`kb mail import`）

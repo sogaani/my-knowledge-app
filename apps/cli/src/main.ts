@@ -5,7 +5,7 @@ import {
   ingestFile, ingestUrl, sourceExcerpt, markProcessed, listInbox, parseFilters, runQuery, buildGold,
   validateAll, archiveNote, lint, backupBronze, pruneBronze, logAccess, importPortfolio, importHealth, importLocation, importCalendar, importKoboLibrary, importMail, formatMailImport, runCollectors, type BronzeKind,
   search, VectorStore, embedNotes, makeEmbedder, setupLindera, linderaStatus, resolveTokenizer, readVectorMeta, type SearchMode,
-  LAYOUT, curateArticles, buildHistory, listArticleDays, articleStats,
+  LAYOUT, curateArticles, buildHistory, listArticleDays, listLaterArticles, articleStats,
 } from "@kb/core";
 
 const argv = process.argv.slice(2);
@@ -313,8 +313,16 @@ switch (cmd) {
       break;
     }
     if (sub === "history") { json(buildHistory(listArticleDays(cfg))); break; }
-    if (sub === "stats") { for (const d of listArticleDays(cfg, { limit: 14 })) { const s = articleStats(d); console.log(`${d.date}\tpicked ${s.picked}/${s.candidates}\topened ${s.opened}\tsaved ${s.saved}\tdismissed ${s.dismissed}`); } break; }
-    die("usage: kb articles curate [--date YYYY-MM-DD] [--dry] [--json] | kb articles history | kb articles stats");
+    if (sub === "stats") { for (const d of listArticleDays(cfg, { limit: 14 })) { const s = articleStats(d); console.log(`${d.date}\tpicked ${s.picked}/${s.candidates}\topened ${s.opened}\tlater ${s.later}\tsaved ${s.saved}\tdismissed ${s.dismissed}\tdone ${s.done}`); } break; }
+    if (sub === "later") {
+      // the read-later queue, oldest first; nothing here expires, the WebUI buttons (取り込む / 読んだ / 興味なし) clear it
+      const list = listLaterArticles(cfg);
+      if (f.json) json(list.map(({ date, item }) => ({ date, id: item.id, title: item.title, url: item.url, feed: item.feed, later_at: item.later_at ?? null, opened_at: item.opened_at ?? null })));
+      else if (!list.length) console.log("articles: nothing queued to read later");
+      else for (const { date, item } of list) console.log(`${(item.later_at ?? date).slice(0, 10)}\t${item.title}\t${item.url}`);
+      break;
+    }
+    die("usage: kb articles curate [--date YYYY-MM-DD] [--dry] [--json] | kb articles history | kb articles stats | kb articles later [--json]");
   }
   case "root": {
     console.log(cfg.root);
@@ -373,7 +381,7 @@ switch (cmd) {
   source <id> [--full]               Bronze meta + excerpt (logged)
   processed <id> <silver-path>... | <id> --none   record which Silver notes came from a Bronze item (--none: nothing to reflect; rss feeds get the 900_system/articles day file from \`kb articles curate\`)
   articles curate [--date d] [--dry] [--json]   RSS feed entries → \`curate\` skill (JSON only) → 900_system/articles/<date>.json (+ Bronze processed); --dry prints the agent's input
-  articles history | articles stats  what happened to earlier picks (the agent's feedback) | per-day counts
+  articles history | articles stats | articles later [--json]   feedback for the agent | per-day counts | the read-later queue (oldest first)
   health import <bronze-id>          rebuild the monthly health_log notes from a collect-health feed
   calendar import <bronze-id>        monthly calendar_log notes (212_calendar) from the collect-calendar feeds
   location import <bronze-id> [--max-lookups 300] [--all]   Google Maps Timeline export → monthly location_log (Places API, 70-day cache)

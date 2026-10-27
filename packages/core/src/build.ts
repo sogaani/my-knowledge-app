@@ -200,7 +200,7 @@ export function buildGold(cfg: KbConfig, db: Database): string[] {
   // 390 / 391 / 392: views across domains (views.ts)
   buildCrossViews(cfg, db, out, { daily: GOLD.daily, trends: GOLD.trends, upcoming: GOLD.upcoming });
   // 393: what to look at again today (resurface.ts). Plaintext, so encrypted domains are counted, not named.
-  const again = resurface(db, today());
+  const again = resurface(db, today(), cfg);
   out(GOLD.resurface, renderResurface(again));
 
   // 300 home

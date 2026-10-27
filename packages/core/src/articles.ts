@@ -173,12 +173,23 @@ export function articleStats(day: Pick<ArticleDay, "items">): { candidates: numb
   return s;
 }
 
-/** The read-later queue across every day file, oldest queued first. Nothing drops out by age. */
-export function listLaterArticles(cfg: KbConfig): { date: string; item: ArticleItem }[] {
+/** Queued this long without a decision: 393_resurface and the weekly review list it as "read it or drop it" (never auto-dropped). */
+export const LATER_STALE_DAYS = 7;
+
+/**
+ * The read-later queue across every day file, oldest queued first. Nothing drops out by age; `olderThanDays` (against
+ * `now`'s local date) narrows it to the entries that have been waiting at least that long.
+ */
+export function listLaterArticles(cfg: KbConfig, opts: { olderThanDays?: number; now?: Date } = {}): { date: string; item: ArticleItem }[] {
   const out: { date: string; item: ArticleItem }[] = [];
   for (const d of listArticleDays(cfg)) for (const item of d.items) if (item.reaction === "later") out.push({ date: d.date, item });
-  return out.sort((a, b) => (a.item.later_at ?? a.date).localeCompare(b.item.later_at ?? b.date));
+  const queuedOn = (e: { date: string; item: ArticleItem }) => (e.item.later_at ?? e.date).slice(0, 10);
+  const list = out.sort((a, b) => queuedOn(a).localeCompare(queuedOn(b)) || (a.item.later_at ?? "").localeCompare(b.item.later_at ?? ""));
+  if (opts.olderThanDays === undefined) return list;
+  const today = localDate((opts.now ?? new Date()).toISOString());
+  return list.filter((e) => daysBetween(queuedOn(e), today) >= opts.olderThanDays!);
 }
+export const daysBetween = (from: string, to: string) => Math.round((new Date(`${to}T00:00:00Z`).getTime() - new Date(`${from}T00:00:00Z`).getTime()) / 86_400_000);
 
 const isRssFeed = (m: BronzeMeta) => m.kind === "feed" && /^collect-rss-/.test(m.source);
 const feedSlug = (name: string) => /^collect-rss-(.+)-\d{4}-\d{2}-\d{2}_\d{4}-\d{2}-\d{2}\.json$/.exec(name)?.[1] ?? name.replace(/^collect-rss-/, "").replace(/\.json$/, "");

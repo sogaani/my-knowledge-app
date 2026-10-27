@@ -228,5 +228,14 @@ describe("read-later queue", () => {
     expect(renderArticlesGold(cfg)).not.toContain("## 後で読む");
     expect(buildHistory(listArticleDays(cfg), { now: at("2026-10-23T00:00:00Z") }).feeds.f).toMatchObject({ later: 1, saved: 1 });
     expect(() => reactToArticle(cfg, { date: "2026-10-14", id: newer, reaction: "done" })).toThrow(/only for an article queued with later/);
+
+    // olderThanDays: waiting at least that long, by the queue date (local), still oldest first
+    reactToArticle(cfg, { date: "2026-10-13", id: other, reaction: "later", now: at("2026-10-16T10:00:00Z") });
+    reactToArticle(cfg, { date: "2026-10-14", id: articleId("https://x/2026-10-14/0"), reaction: "later", now: at("2026-10-22T10:00:00Z") });
+    const titles = (o: Parameters<typeof listLaterArticles>[1]) => listLaterArticles(cfg, o).map((e) => `${e.date}/${e.item.title}`);
+    expect(titles({})).toEqual(["2026-10-13/first", "2026-10-14/first"]);
+    expect(titles({ olderThanDays: 7, now: at("2026-10-23T12:00:00Z") })).toEqual(["2026-10-13/first"]);
+    expect(titles({ olderThanDays: 0, now: at("2026-10-23T12:00:00Z") })).toHaveLength(2);
+    expect(titles({ olderThanDays: 30, now: at("2026-10-23T12:00:00Z") })).toEqual([]);
   });
 });

@@ -6,6 +6,7 @@ import { loadConfig } from "./config";
 import { indexNotes, openDb } from "./db";
 import { lint } from "./maintain";
 import { dueNotes, isStale, onThisDay, renderResurface, renderResurfaceHome, resurface, seededPick } from "./resurface";
+import { articleId, reactToArticle, writeArticleDay } from "./articles";
 
 const TODAY = "2026-10-13";
 
@@ -100,6 +101,33 @@ describe("resurface", () => {
     expect(home).not.toContain("仕事ノート");
   });
 
+  test("read-later articles queued 7+ days are listed to decide on; newer ones and settled ones are not; nothing is dropped", () => {
+    const { cfg, db } = fixture();
+    const it = (title: string, url: string) => ({ id: articleId(url), title, url, feed: "f", published: "2026-10-01", summary: "", bronze: "b", picked: true });
+    writeArticleDay(cfg, { date: "2026-09-20", curated_at: "", feeds: ["f"], items: [it("古い記事", "https://x/old"), it("片づけた記事", "https://x/done")] });
+    writeArticleDay(cfg, { date: "2026-10-10", curated_at: "", feeds: ["f"], items: [it("新しい記事", "https://x/new"), it("放置|縦棒", "https://x/pipe")] });
+    reactToArticle(cfg, { date: "2026-09-20", id: articleId("https://x/old"), reaction: "later", now: new Date("2026-09-21T01:00:00Z") });
+    reactToArticle(cfg, { date: "2026-09-20", id: articleId("https://x/old"), reaction: "opened", now: new Date("2026-09-25T01:00:00Z") });
+    reactToArticle(cfg, { date: "2026-09-20", id: articleId("https://x/done"), reaction: "later", now: new Date("2026-09-21T01:00:00Z") });
+    reactToArticle(cfg, { date: "2026-09-20", id: articleId("https://x/done"), reaction: "done", now: new Date("2026-09-22T01:00:00Z") });
+    reactToArticle(cfg, { date: "2026-10-10", id: articleId("https://x/new"), reaction: "later", now: new Date("2026-10-10T01:00:00Z") }); // 3 days: not yet
+    reactToArticle(cfg, { date: "2026-10-10", id: articleId("https://x/pipe"), reaction: "later", now: new Date("2026-10-06T01:00:00Z") }); // exactly 7 days
+
+    expect(resurface(db, TODAY).articles).toEqual([]); // no cfg: count-only callers
+    const r = resurface(db, TODAY, cfg);
+    expect(r.articles.map((a) => [a.title, a.since, a.days, a.opened])).toEqual([["古い記事", "2026-09-21", 22, true], ["放置|縦棒", "2026-10-06", 7, false]]);
+    expect(r.articles[0]).toMatchObject({ date: "2026-09-20", id: articleId("https://x/old"), url: "https://x/old", feed: "f" });
+    const md = renderResurface(r);
+    expect(md).toContain("## 読むか捨てるか決める記事（2 件）");
+    expect(md).toContain("- [古い記事](https://x/old) — f — 9/21 から 22 日・開いた");
+    expect(md).toContain("- [放置\\|縦棒](https://x/pipe) — f — 10/6 から 7 日");
+    expect(md).not.toContain("新しい記事");
+    expect(md).not.toContain("片づけた記事");
+    const home = renderResurfaceHome(r).join("\n");
+    expect(home).toContain("放置中の記事 2 件");
+    expect(home).toContain("- 後で読む: 2 件が 7 日以上そのまま（最長 22 日）。読むか捨てるかは [記事](309_articles.md) で");
+    expect(renderResurfaceHome(resurface(db, TODAY)).join("\n")).not.toContain("後で読む");
+  });
   test("dueNotes on an empty index", () => {
     expect(dueNotes([], TODAY)).toEqual([]);
   });

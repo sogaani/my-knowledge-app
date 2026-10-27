@@ -66,11 +66,11 @@ api.get("/home", requireUser, async (c) => {
   const media = runQuery(db, { filters: [{ field: "type", op: "=", value: "media" }], limit: 5000 });
   const byStatus = (xs: typeof books) => xs.reduce<Record<string, number>>((a, x) => ((a[x.status] = (a[x.status] ?? 0) + 1), a), {});
   // the same list as Gold 393, but this page is behind Access: encrypted-domain notes are named, with their last view
-  const again = resurface(db, todayJst());
+  const again = resurface(db, todayJst(), cfg);
   return c.json({
     counts, monthlySubscriptions: monthlyByCurrency(subs), activeSubscriptions: subs.length,
     books: byStatus(books), media: byStatus(media), projects, recent: withViewed(recent), jobs: listJobs(8),
-    resurface: { date: again.date, due: withViewed(again.due), onThisDay: withViewed(again.onThisDay), random: withViewed(again.random) },
+    resurface: { date: again.date, due: withViewed(again.due), onThisDay: withViewed(again.onThisDay), random: withViewed(again.random), articles: again.articles },
     lint: await timed(c, "lint", cachedLint), head: head(), unpushed: unsavedCount(), pushError: pushState.error,
   });
 });
@@ -447,7 +447,10 @@ async function notifyJobDone(kind: string, payload: Record<string, unknown>, don
     // the morning's picks: once per date, only when there are some (a run with nothing new stays silent)
     const r = (done.result ?? {}) as { skipped?: boolean; date?: string | null; picked?: number; top?: string[] };
     if (r.skipped || !r.date || !r.picked) return;
-    const res = await sendPushToAll({ title: `今日の記事 ${r.picked} 件`, body: (r.top ?? []).join(" / ").slice(0, 200), url: "/articles", tag: `articles-${r.date}` });
+    // the read-later queue rides along, so the morning tap also reminds of what is still waiting
+    const later = listLaterArticles(cfg).length;
+    const body = (r.top ?? []).join(" / ").slice(0, 200) + (later ? `\n後で読む ${later} 件` : "");
+    const res = await sendPushToAll({ title: `今日の記事 ${r.picked} 件`, body, url: "/articles", tag: `articles-${r.date}` });
     console.log(`push articles ${r.date}: sent ${res.sent}, removed ${res.removed}, failed ${res.failed}`);
   }
   if (kind === "ask") {

@@ -32,3 +32,26 @@ describe("ingestFile", () => {
     expect(existsSync(b)).toBe(false);
   });
 });
+
+describe("kb inbox put", () => {
+  const { putInbox, listInbox } = require("./bronze") as typeof import("./bronze");
+  const { loadConfig } = require("./config") as typeof import("./config");
+  const { mkdtempSync, readFileSync, writeFileSync, existsSync } = require("node:fs") as typeof import("node:fs");
+  const { tmpdir } = require("node:os") as typeof import("node:os");
+  const { join } = require("node:path") as typeof import("node:path");
+
+  test("writes atomically by name, refuses an existing name unless forced, rejects paths", () => {
+    const root = mkdtempSync(join(tmpdir(), "kb-inbox-"));
+    writeFileSync(join(root, "AGENTS.md"), "");
+    const cfg = loadConfig(root);
+    expect(putInbox(cfg, "moneytree-2026-10-22_2026-10-29.md", "# a\n")).toBe(true);
+    expect(readFileSync(join(cfg.inbox, "moneytree-2026-10-22_2026-10-29.md"), "utf8")).toBe("# a\n");
+    expect(existsSync(join(cfg.inbox, "moneytree-2026-10-22_2026-10-29.md.part"))).toBe(false);
+    expect(putInbox(cfg, "moneytree-2026-10-22_2026-10-29.md", "# b\n")).toBe(false);
+    expect(readFileSync(join(cfg.inbox, "moneytree-2026-10-22_2026-10-29.md"), "utf8")).toBe("# a\n");
+    expect(putInbox(cfg, "moneytree-2026-10-22_2026-10-29.md", "# b\n", { force: true })).toBe(true);
+    expect(readFileSync(join(cfg.inbox, "moneytree-2026-10-22_2026-10-29.md"), "utf8")).toBe("# b\n");
+    expect(listInbox(cfg).map((p) => p.split("/").pop())).toEqual(["moneytree-2026-10-22_2026-10-29.md"]);
+    for (const bad of ["", "../x.md", "a/b.md", ".hidden", " x.md"]) expect(() => putInbox(cfg, bad, "x")).toThrow(/bad inbox name/);
+  });
+});

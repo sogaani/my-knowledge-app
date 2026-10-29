@@ -179,6 +179,21 @@ export function listInbox(cfg: KbConfig): string[] {
   return readdirSync(cfg.inbox).filter((f) => !f.startsWith(".")).map((f) => join(cfg.inbox, f));
 }
 
+/**
+ * Drop a text file into 000_inbox by name (`kb inbox put`): the way a skill that produces inbox input (moneytree-pull)
+ * writes it without touching the inbox path itself, which the agents' permission rules deny. Written atomically so the
+ * ingest never sees a half file. Returns false (and writes nothing) when the name is already there, unless `force`.
+ */
+export function putInbox(cfg: KbConfig, name: string, text: string, opts: { force?: boolean } = {}): boolean {
+  if (!name || name.startsWith(".") || name.includes("/") || name.includes("\\") || name !== name.trim()) throw new Error(`bad inbox name: ${JSON.stringify(name)}`);
+  const p = join(cfg.inbox, name);
+  if (existsSync(p) && !opts.force) return false;
+  mkdirSync(cfg.inbox, { recursive: true });
+  writeFileSync(`${p}.part`, text);
+  renameSync(`${p}.part`, p);
+  return true;
+}
+
 /** Iterate all bronze metas (for lint / prune). */
 export function* walkBronze(cfg: KbConfig): Generator<BronzeMeta> {
   if (!existsSync(cfg.bronze)) return;

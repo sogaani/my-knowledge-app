@@ -1,8 +1,9 @@
 #!/usr/bin/env bun
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   loadConfig, openDb, indexNotes, loadSimilar, SchemaRegistry, createNote, DuplicateError, patchFrontmatter, appendToSection,
-  ingestFile, ingestUrl, sourceExcerpt, markProcessed, listInbox, parseFilters, runQuery, buildGold,
+  ingestFile, ingestUrl, sourceExcerpt, markProcessed, listInbox, putInbox, parseFilters, runQuery, buildGold,
   validateAll, archiveNote, lint, backupBronze, pruneBronze, logAccess, importPortfolio, importHealth, importLocation, importCalendar, importKoboLibrary, importMail, formatMailImport, runCollectors, type BronzeKind,
   search, VectorStore, embedNotes, makeEmbedder, setupLindera, linderaStatus, resolveTokenizer, readVectorMeta, type SearchMode,
   LAYOUT, curateArticles, buildHistory, listArticleDays, listLaterArticles, articleStats,
@@ -94,6 +95,17 @@ switch (cmd) {
     break;
   }
   case "inbox": {
+    const { f, pos } = flags(argv);
+    if (pos[0] === "put") {
+      // `kb inbox put <name> [--file <path>] [--force]`: the text comes from --file or stdin; refuses an existing name
+      const name = pos[1];
+      if (!name) die("usage: kb inbox put <name> [--file <path>] [--force]   (content from --file or stdin)");
+      const text = f.file ? readFileSync(String(f.file), "utf8") : await Bun.stdin.text();
+      if (!text.trim()) die("kb inbox put: empty content");
+      if (!putInbox(cfg, name!, text, { force: !!f.force })) die(`kb inbox put: ${name} is already in the inbox (--force to overwrite)`);
+      console.log(join(cfg.inbox, name!));
+      break;
+    }
     for (const p of listInbox(cfg)) console.log(p);
     break;
   }
@@ -378,6 +390,7 @@ switch (cmd) {
   set <path> --set k=v               patch frontmatter (updated= today)
   append <path> "<line>" [--section] append a dated bullet to a section
   inbox                              list 000_inbox
+  inbox put <name> [--file p] [--force]   write stdin (or --file) into 000_inbox as <name>; refuses an existing name
   ingest <path|url> [--kind] [--keep] | --all   move into Bronze, print id
   source <id> [--full]               Bronze meta + excerpt (logged)
   processed <id> <silver-path>... | <id> --none   record which Silver notes came from a Bronze item (--none: nothing to reflect; rss feeds get the 900_system/articles day file from \`kb articles curate\`)

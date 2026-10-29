@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { lastBackupAt } from "./backup";
 import { loadConfig } from "./config";
-import { buildOpsDigest, clipError, countInbox, countNoteChanges, errorHead, extractJudgements, formatOpsDigest, renderOpsDigest, summarizeCollect, tokensLine } from "./ops";
+import { buildOpsDigest, clipError, countInbox, countNoteChanges, errorHead, extractJudgements, formatOpsDigest, renderOpsDigest, summarizeCollect } from "./ops";
 import { indexNotes, openDb } from "./db";
 
 const CF_502 = `<!DOCTYPE html><html><head><title>kb.example | 502: Bad gateway</title><style>body{margin:0}</style>
@@ -152,21 +152,21 @@ describe("buildOpsDigest / format", () => {
     expect(text).not.toContain("テスト口座");
   });
 
-  test("token days from collect-tokens.json: one line, days only, markers for expiring / expired", () => {
+  test("a refused credential is marked 認証失敗 in the collect line; other failures stay 失敗", () => {
     const root = fixtureRoot();
     const now = new Date(2026, 9, 14, 7, 5);
-    const iso = (days: number) => new Date(now.getTime() + days * 86_400_000).toISOString();
-    writeFileSync(join(root, "900_system/cache/collect-tokens.json"), JSON.stringify({ writtenAt: iso(0), tokens: [
-      { id: "google", label: "Gmail / Calendar / YouTube", expiresAt: iso(1.2), warnDays: 1.5 },
-      { id: "google-health", label: "Google Health", expiresAt: null, warnDays: 1.5 },
-      { id: "github", label: "GitHub PAT", expiresAt: iso(-2), warnDays: 7 },
-    ] }));
+    writeFileSync(join(root, "900_system/cache/collect-state.json"), JSON.stringify({
+      gmail: { lastRunAt: now.toISOString(), lastError: "GOOGLE_REFRESH_TOKEN expired or revoked (invalid_grant): run bun run collect auth google" },
+      github: { lastRunAt: now.toISOString(), lastError: 'HTTP 401 https://api.github.com/user: {"message":"Bad credentials"}' },
+      youtube: { lastRunAt: now.toISOString(), lastError: "HTTP 403 quota" },
+      rss: { lastRunAt: now.toISOString(), lastItems: 3 },
+    }));
     const d = buildOpsDigest(loadConfig(root), { now, inboxNames: [], agentOutput: "", agentOk: true, changes: [] });
-    expect(d.tokens.map((t) => t.id)).toEqual(["google", "github"]);
-    const line = "トークン残日数: Gmail / Calendar / YouTube 1.2 日（要更新） · GitHub PAT 期限切れ";
-    expect(formatOpsDigest(d).body.split("\n")[2]).toBe(line);
+    expect(d.collect.map((s) => [s.id, s.status, s.auth ?? false])).toEqual([["github", "failed", true], ["gmail", "failed", true], ["rss", "ok", false], ["youtube", "failed", false]]);
+    const line = "収集: github 認証失敗 · gmail 認証失敗 · rss 3 · youtube 失敗";
+    expect(formatOpsDigest(d).body.split("\n")[0]).toBe(line);
     expect(renderOpsDigest(d)).toContain(line);
-    expect(tokensLine([{ id: "github", label: "GitHub PAT", daysLeft: 83.4, warnDays: 7 }])).toBe("トークン残日数: GitHub PAT 83 日");
+    expect(renderOpsDigest(d)).toContain("  gmail: GOOGLE_REFRESH_TOKEN expired or revoked (invalid_grant)");
   });
 
   test("no backup log, no state, failed agent", () => {
@@ -177,7 +177,6 @@ describe("buildOpsDigest / format", () => {
     const d = buildOpsDigest(cfg, { now: new Date(2026, 0, 2), inboxNames: [], agentOutput: "", agentOk: false, changes: [] });
     expect(d.backupDays).toBeNull();
     expect(d.collect).toEqual([]);
-    expect(d.tokens).toEqual([]);
     const push = formatOpsDigest(d);
     expect(push.title).toBe("[失敗] 運用ダイジェスト 1/2");
     expect(push.body).toBe("収集: 記録なし\nノート: 新規 0 / 更新 0 · 未処理 Bronze 0 · バックアップ 未実施");

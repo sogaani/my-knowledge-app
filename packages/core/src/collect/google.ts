@@ -23,21 +23,7 @@ export const GOOGLE_TOKENS = [
   { name: "google-health", envVar: "GOOGLE_HEALTH_REFRESH_TOKEN", scopes: GOOGLE_HEALTH_SCOPES, label: "Google Health" },
 ] as const;
 
-/**
- * While the OAuth consent screen is in "Testing", Google expires refresh tokens 7 days after they are issued, whatever
- * their use. The collector records `<TOKEN>_ISSUED_AT` on consent so it can warn before that happens.
- * GOOGLE_TOKEN_TTL_DAYS (default 7) changes the lifetime; 0 means no expiry (consent screen published to production).
- */
-export function tokenExpiry(env: Env, envVar: string, now = new Date()): { issuedAt?: Date; expiresAt?: Date; daysLeft?: number } {
-  const ttl = env.GOOGLE_TOKEN_TTL_DAYS === undefined || env.GOOGLE_TOKEN_TTL_DAYS === "" ? 7 : Number(env.GOOGLE_TOKEN_TTL_DAYS);
-  const raw = env[`${envVar}_ISSUED_AT`];
-  const issuedAt = raw && !Number.isNaN(Date.parse(raw)) ? new Date(raw) : undefined;
-  if (!issuedAt || !(ttl > 0)) return { issuedAt };
-  const expiresAt = new Date(issuedAt.getTime() + ttl * 86_400_000);
-  return { issuedAt, expiresAt, daysLeft: (expiresAt.getTime() - now.getTime()) / 86_400_000 };
-}
-
-/** Message used when Google refuses the refresh token (expired after 7 days in Testing, or revoked). */
+/** Message used when Google refuses the refresh token (revoked, consent withdrawn, or the client secret reset). */
 export const isExpiredTokenError = (msg: string) => /invalid_grant|refresh token (has )?expired|expired or revoked/i.test(msg);
 
 const TOKEN_URL = "https://oauth2.googleapis.com/token";

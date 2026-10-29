@@ -91,10 +91,10 @@ Gmail は最多のソース（3 日で 185 件、うち purchase と finance が
 ## 初回設定
 
 1. `cp apps/collector/.env.example apps/collector/.env` して `KB_ROOT` を書く。
-2. GitHub: fine-grained PAT（対象リポジトリに Metadata / Contents / Issues / Pull requests の Read。非公開の push・レビュー・star も拾うならユーザー権限 Events の Read も）を `GITHUB_TOKEN` に。GitHub が表示する有効期限を `GITHUB_TOKEN_EXPIRES=YYYY-MM-DD` に書く（下の「トークンの期限」）。
-3. Google: GCP で Gmail API・Google Calendar API・YouTube Data API v3・Google Health API を有効化し、OAuth クライアント（種類「デスクトップ アプリ」）を作って `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` に。同意画面は「テスト」のまま運用している（下の「トークンの期限」に本番公開を試す手順）。
+2. GitHub: fine-grained PAT（対象リポジトリに Metadata / Contents / Issues / Pull requests の Read。非公開の push・レビュー・star も拾うならユーザー権限 Events の Read も）を `GITHUB_TOKEN` に。
+3. Google: GCP で Gmail API・Google Calendar API・YouTube Data API v3・Google Health API を有効化し、OAuth クライアント（種類「デスクトップ アプリ」）を作って `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` に。同意画面は「本番環境」に公開する（「テスト」のままだとリフレッシュトークンが同意から 7 日で失効する。下の「認証エラー」）。
 4. RSS: 追いたいブログ・ニュースのフィード URL を `FEED_URLS` に並べる（無ければ `rss` は skip）。
-5. `bun run collect auth`：ブラウザで 2 回同意する（Gmail・Calendar・YouTube 用と、Health のスコープだけの Health 用）。`GOOGLE_REFRESH_TOKEN` / `GOOGLE_HEALTH_REFRESH_TOKEN` と発行日時が `.env` に書き込まれる（トークンは画面に出ない）。
+5. `bun run collect auth`：ブラウザで 2 回同意する（Gmail・Calendar・YouTube 用と、Health のスコープだけの Health 用）。`GOOGLE_REFRESH_TOKEN` / `GOOGLE_HEALTH_REFRESH_TOKEN` が `.env` に書き込まれる（トークンは画面に出ない）。
 6. `bun run collect status` で各ソースが `configured` になったか確認し、`bun run collect --dry-run` で件数だけ見る。
 7. データリポジトリの `900_system/scripts/launchd.sh` を再実行して `daily-collect` を入れる。
 8. Gmail を切り替える：`900_system/gas/emailfilter/README.md` の「pushToInbox からの切り替え」。
@@ -106,36 +106,17 @@ Gmail は最多のソース（3 日で 185 件、うち purchase と finance が
 - `bun run collect [source...] [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--dry-run]`：手動実行。`--from` で取りこぼした期間を取り直せる。
 - 同じ期間のファイルが inbox に残っている間は上書きしない（ingest 前の二重実行は無害）。Bronze 側も同じ内容なら同じ ID になる。
 - ログ：`my-knowledge/900_system/logs/collect.log`。失敗したソースは `bun run collect status` の `last error` に出る。
-- 401 / 403（権限）が続くとき：Google はトークン失効か同意画面がテストのまま → `bun run collect auth google` をやり直す。
 
-## トークンの期限
+## 認証エラー
 
-期限のある資格情報は 3 つ: Google のリフレッシュトークン 2 本と GitHub の fine-grained PAT。`packages/core/src/collect/tokens.ts` がまとめて扱う。
+資格情報の期限は追わない（Google のリフレッシュトークンは同意画面を本番公開してあるので切れない。GitHub の fine-grained PAT は GitHub が期限前にメールで知らせる）。通知するのは、実際に認証で取得に失敗したときだけ。`packages/core/src/collect/tokens.ts` が「どの資格情報をどのソースが使うか」と「認証エラーの判定」（Google の `invalid_grant`、GitHub の 401）を持つ。
 
-- `bun run collect status` の末尾に各トークンの発行日時・期限・残り日数が出る。
-- 毎朝の実行（launchd）が、Google は期限の 1.5 日前、GitHub は 7 日前を切ったときと、失効したときに macOS の通知を出す。ログ `collect.log` にも `WARN` が出る。
-- 実行のたびに `900_system/cache/collect-tokens.json` に期限日だけ（値は書かない）を残し、07:00 の運用ダイジェストが「トークン残日数: Gmail / Calendar / YouTube 4.2 日 · GitHub PAT 83 日」の行を出す（残りが警告の閾値以下なら「（要更新）」、切れていれば「期限切れ」）。
-- 失効したまま実行すると、そのトークンを使うソースだけが失敗し（Google は `… expired or revoked (invalid_grant): run bun run collect auth …`、GitHub は 401）、他のソースは続行する。期間は前回の位置から取り直すので、取りこぼしは出ない（Gmail は未取得ラベル基準）。
+- 失敗したソースだけが止まり（Google は `… expired or revoked (invalid_grant): run bun run collect auth …`、GitHub は `HTTP 401 … Bad credentials`）、他のソースは続行する。期間は前回の位置から取り直すので、取りこぼしは出ない（Gmail は未取得ラベル基準）。
+- 毎朝の実行（launchd）が、資格情報ごとに 1 通の macOS 通知を出す（「Gmail / Calendar / YouTube の認証に失敗しました（gmail, calendar）。bun run collect auth google」）。ログ `collect.log` にも `WARN` が出る。quota 超過やフィードの障害など認証以外の失敗は通知しない（ログと運用ダイジェストに出る）。
+- 07:00 の運用ダイジェストの「収集:」行は、認証で失敗したソースを `gmail 認証失敗` と出す（他の失敗は `失敗`）。`bun run collect status` の `last error` にも残る。
+- 直し方: Google は `bun run collect auth`（2 つとも）か `bun run collect auth google` / `auth google-health`（片方。同意し直すと新しいトークンが `.env` に書き込まれる）。GitHub は Settings → Developer settings → Fine-grained tokens → Regenerate token して `GITHUB_TOKEN` を書き換える。
 
-### Google（同意画面が「テスト」の間）
-
-Google は「テスト」状態のアプリのリフレッシュトークンを、同意から 7 日で失効させる（使っていても延長されない。プログラムからは更新できない）。
-
-- 通知が来たら `bun run collect auth`（2 つとも）か `bun run collect auth google` / `auth google-health`（片方）。同意し直した時点から 7 日に延びる。発行日時は `.env` に書き込まれる。
-- 同意画面を「本番環境」に公開できたら `GOOGLE_TOKEN_TTL_DAYS=0` にして警告を止める。
-
-**本番公開を試す手順**（ユーザー作業。通らなくても 7 日運用のままで困らない）:
-
-1. Cloud Console → APIs & Services → OAuth consent screen（Google Auth Platform → Audience）→ **Publish app**。個人用で外部ユーザーを入れないなら、アプリ名・サポートメール・ホームページ URL くらいで出せる。
-2. `gmail.modify` は restricted scope なので、公開すると「Verification required」になり、CASA のセキュリティ評価（第三者機関、有料）まで求められる。calendar.readonly / youtube.readonly / googlehealth.* は sensitive 止まりなので動画デモと説明で済む見込み。
-3. 未検証のまま公開状態にしておく選択肢もある: 同意画面に「このアプリは確認されていません」の警告が出るが、自分のアカウントで「詳細 → （安全でないページ）に移動」で同意でき、**リフレッシュトークンは 7 日で切れなくなる**。ただし restricted scope を含む未検証アプリは 100 ユーザー上限と、Google が後から拒否する可能性がある。
-4. 公開後に `bun run collect auth` で取り直し、`GOOGLE_TOKEN_TTL_DAYS=0`、`bun run collect status` で「期限なし」になれば完了。`invalid_grant` が 7 日後に出たら公開が効いていないので、`GOOGLE_TOKEN_TTL_DAYS` を消して 7 日運用に戻す。
-
-restricted scope（`gmail.modify`）で通らなければ 7 日運用のまま。警告と運用ダイジェストの残日数で回す。
-
-### GitHub
-
-fine-grained PAT は期限必須（最長 1 年）。GitHub は期限切れをメールで知らせるが、collector が黙って 401 で止まらないよう `GITHUB_TOKEN_EXPIRES` に期限日を書いておく（書かなければ `status` に「期限不明」と出るだけで警告は出ない）。更新は GitHub → Settings → Developer settings → Fine-grained tokens → Regenerate token、`GITHUB_TOKEN` と `GITHUB_TOKEN_EXPIRES` を書き換える。
+Google の同意画面が「テスト」のままだと、リフレッシュトークンは同意から 7 日で失効する（使っていても延長されない）。`invalid_grant` が 7 日ごとに出るならそれが原因なので、Cloud Console → Google Auth Platform → Audience → **Publish app** で公開し、`bun run collect auth` で取り直す（`gmail.modify` は restricted scope なので「確認されていません」の警告が出るが、自分のアカウントなら「詳細 → 移動」で同意できる）。
 
 ## 通知（Web Push）
 
@@ -144,7 +125,7 @@ API に VAPID 鍵があるとき（`VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY`）�
 | 通知 | 条件 | 内容 |
 |---|---|---|
 | `ジョブ失敗: <kind>` | `search` 以外のジョブが `ok:false` で終わったとき（agent の非 0 終了、`kb build` 失敗、例外）。束ねた ingest は先頭ジョブの分だけ 1 通（題名に「N 件束ね」） | ジョブ id の先頭 8 桁とエラーの先頭 140 文字（HTML は剥がす）。タップで `/jobs` |
-| `運用ダイジェスト M/D` | launchd の `daily-ingest`（07:00）が終わったとき 1 通（inbox が空で agent を skip したときも）。`enqueue.sh` は worker の資格情報で `POST /api/jobs` するので API がペイロードに `scheduled: true` を付け、worker はそれを見てダイジェストを組み立てる（WebUI から投げた ingest には付かない）。定期実行が他の ingest と束ねられても 1 通で、先頭ジョブの `done` に付く | 収集: ソース別の件数（`collect-state.json` の `lastItems`）・失敗・36 時間以上走っていないソース / ノート: 新規・更新数（コミット前の `git status` の Silver）・未処理 Bronze 数・最終バックアップからの日数（`backup.log`、無ければ「未実施」）/ トークン残日数（`collect-tokens.json`。上の「トークンの期限」）/ 今日見直すノート N 件（Gold `393_resurface.md` の「見直し期限」と同じ数。`resurface()` を `kb build` と共用。同じ月日の過去ノートがあればその件数も）/ agent の「判断に迷った点」の件数と 1 つ目。全文はジョブの結果（`result.digest`）に入り、Jobs ページで読める（見直しは平文ドメインの先頭 5 件をタイトル付きで。暗号化ドメインは件数のみ）。ingest が失敗したときは題名に `[失敗]` |
+| `運用ダイジェスト M/D` | launchd の `daily-ingest`（07:00）が終わったとき 1 通（inbox が空で agent を skip したときも）。`enqueue.sh` は worker の資格情報で `POST /api/jobs` するので API がペイロードに `scheduled: true` を付け、worker はそれを見てダイジェストを組み立てる（WebUI から投げた ingest には付かない）。定期実行が他の ingest と束ねられても 1 通で、先頭ジョブの `done` に付く | 収集: ソース別の件数（`collect-state.json` の `lastItems`）・失敗（認証で失敗したソースは `認証失敗`。上の「認証エラー」）・36 時間以上走っていないソース / ノート: 新規・更新数（コミット前の `git status` の Silver）・未処理 Bronze 数・最終バックアップからの日数（`backup.log`、無ければ「未実施」）/ 今日見直すノート N 件（Gold `393_resurface.md` の「見直し期限」と同じ数。`resurface()` を `kb build` と共用。同じ月日の過去ノートがあればその件数も）/ agent の「判断に迷った点」の件数と 1 つ目。全文はジョブの結果（`result.digest`）に入り、Jobs ページで読める（見直しは平文ドメインの先頭 5 件をタイトル付きで。暗号化ドメインは件数のみ）。ingest が失敗したときは題名に `[失敗]` |
 | `本日の売買シート` | `trade-plan` スキルが当日のシートを作ったとき（従来どおり） | — |
 | `回答: <質問>` | チャット（`ask` ジョブ）の回答が届いたとき。失敗は上の「ジョブ失敗」で | 質問の先頭 60 文字が題名、回答の先頭 200 文字が本文。タップで `/chat`。開いたままのチャット画面は `GET /api/jobs/:id/wait`（long-poll、`done` で起きる）で通知を待たずに回答を出す |
 

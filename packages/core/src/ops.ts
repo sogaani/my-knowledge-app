@@ -8,7 +8,7 @@
 import { processState, walkBronze } from "./bronze";
 import { lastBackupAt } from "./backup";
 import { loadState, type CollectState } from "./collect/run";
-import { formatDays, loadTokenDays, type TokenDays } from "./collect/tokens";
+import { isAuthError } from "./collect/tokens";
 import type { Database } from "bun:sqlite";
 import { SILVER_PREFIX, type KbConfig } from "./config";
 import { resurface, splitEncrypted, type ResurfaceEntry } from "./resurface";
@@ -21,6 +21,8 @@ export interface CollectSourceSummary {
   items: number;
   /** Head of the last error (already clipped by the collector). */
   error?: string;
+  /** The error is a refused credential (Google invalid_grant / 401): the fix is `bun run collect auth` or a new PAT. */
+  auth?: true;
   /** Hours since the last run (for `stale`). */
   ageHours?: number;
 }
@@ -40,8 +42,6 @@ export interface OpsDigest {
   unprocessedBronze: number;
   /** Days since the last real (non-dry) `kb backup`; null = never ran. */
   backupDays: number | null;
-  /** Collector credentials with a known expiry (collect-tokens.json): days left, no values. Empty = the collector never wrote it. */
-  tokens: TokenDays[];
   agentOk: boolean;
   /** Notes to look at again today (resurface.ts, the same list as Gold 393); null when the digest was built without the index. */
   review: { due: number; onThisDay: number; /** plaintext entries only (the digest text is stored in the API's job table) */ top: ResurfaceEntry[] } | null;
@@ -69,7 +69,7 @@ export function errorHead(result: unknown, max = 140): string {
 export function summarizeCollect(state: CollectState, now = new Date(), staleHours = 36): CollectSourceSummary[] {
   return Object.entries(state).sort(([a], [b]) => a.localeCompare(b)).map(([id, st]) => {
     const items = st.lastItems ?? 0;
-    if (st.lastError) return { id, status: "failed", items, error: clipError(st.lastError, 80) };
+    if (st.lastError) return { id, status: "failed", items, error: clipError(st.lastError, 80), ...(isAuthError(st.lastError) ? { auth: true as const } : {}) };
     const ageHours = st.lastRunAt ? (now.getTime() - new Date(st.lastRunAt).getTime()) / 3600_000 : Infinity;
     if (ageHours > staleHours) return { id, status: "stale", items, ageHours: Number.isFinite(ageHours) ? Math.round(ageHours) : undefined };
     return { id, status: "ok", items };
@@ -147,7 +147,6 @@ export function buildOpsDigest(cfg: KbConfig, input: OpsDigestInput): OpsDigest 
     judgements: extractJudgements(input.agentOutput),
     unprocessedBronze,
     backupDays: backup ? Math.floor((now.getTime() - backup.getTime()) / 86400_000) : null,
-    tokens: loadTokenDays(cfg, now),
     agentOk: input.agentOk,
     review: input.db ? reviewSummary(input.db, localDate(now)) : null,
     articles: articlesSummary(cfg, localDate(now)),
@@ -171,7 +170,6 @@ export function formatOpsDigest(d: OpsDigest): { title: string; body: string } {
   const [, m, day] = d.date.split("-");
   const title = `${d.agentOk ? "" : "[失敗] "}運用ダイジェスト ${Number(m)}/${Number(day)}`;
   const lines = [collectLine(d), notesLine(d)];
-  if (d.tokens.length) lines.push(tokensLine(d.tokens));
   if (d.review) lines.push(reviewLine(d.review));
   if (d.articles) lines.push(articlesLine(d.articles));
   if (d.judgements.length) {
@@ -185,7 +183,6 @@ export function formatOpsDigest(d: OpsDigest): { title: string; body: string } {
 export function renderOpsDigest(d: OpsDigest): string {
   const lines = [`# 運用ダイジェスト ${d.date}${d.agentOk ? "" : "（ingest 失敗）"}`, "", collectLine(d), `inbox: feed ${d.inbox.feeds} / mail ${d.inbox.mails} / その他 ${d.inbox.other}`, notesLine(d)];
   for (const s of d.collect) if (s.status === "failed") lines.push(`  ${s.id}: ${s.error}`);
-  if (d.tokens.length) lines.push(tokensLine(d.tokens));
   if (d.review) {
     lines.push(reviewLine(d.review));
     for (const e of d.review.top) lines.push(`  ${e.title}: ${e.reason}`);
@@ -207,13 +204,8 @@ function articlesLine(a: NonNullable<OpsDigest["articles"]>): string {
 }
 function collectLine(d: OpsDigest): string {
   if (!d.collect.length) return "収集: 記録なし";
-  const parts = d.collect.map((s) => s.status === "ok" ? `${s.id} ${s.items}` : s.status === "failed" ? `${s.id} 失敗` : `${s.id} 未実行${s.ageHours !== undefined ? ` ${Math.round(s.ageHours / 24)}d` : ""}`);
+  const parts = d.collect.map((s) => s.status === "ok" ? `${s.id} ${s.items}` : s.status === "failed" ? `${s.id} ${s.auth ? "認証失敗" : "失敗"}` : `${s.id} 未実行${s.ageHours !== undefined ? ` ${Math.round(s.ageHours / 24)}d` : ""}`);
   return `収集: ${parts.join(" · ")}`;
-}
-/** "トークン残日数: …" — expired or within warnDays gets a marker so the push is enough to know a renewal is due. */
-export function tokensLine(tokens: TokenDays[]): string {
-  const parts = tokens.map((t) => t.daysLeft <= 0 ? `${t.label} 期限切れ` : `${t.label} ${formatDays(t.daysLeft)}${t.daysLeft <= t.warnDays ? "（要更新）" : ""}`);
-  return `トークン残日数: ${parts.join(" · ")}`;
 }
 function notesLine(d: OpsDigest): string {
   const backup = d.backupDays === null ? "未実施" : d.backupDays === 0 ? "今日" : `${d.backupDays} 日前`;

@@ -4,17 +4,13 @@
  *   bun run collect [source...] [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--dry-run]
  *   bun run collect status
  *   bun run collect auth [google | google-health]   (no name: both, one after the other)
- * While the Google consent screen stays in "Testing", refresh tokens die 7 days after consent; the GitHub PAT dies on
- * the date recorded as GITHUB_TOKEN_EXPIRES. The daily run warns (macOS notification) ahead of either and when one has
- * expired, and leaves the expiry dates in collect-tokens.json for the morning ops digest. `bun run collect auth` renews
- * the Google ones. Every command chmods the .env to 0600.
+ * No credential expiry is tracked: when a source fails because Google or GitHub refused its token, the daily run sends
+ * a macOS notification naming the credential (`bun run collect auth` renews the Google ones). Every command chmods
+ * the .env to 0600.
  * Logic lives in @kb/core (collect/); this is the entry point that owns the .env with the secrets.
  */
 import { join } from "node:path";
-import {
-  COLLECTORS, GOOGLE_TOKENS, authorizeGoogle, isExpiredTokenError, loadConfig, loadState, runCollectors, saveTokenExpiries,
-  secureEnvFile, setEnvVar, tokenExpiry, tokenStatuses, tokenWarnings, formatDays, ymd, type TokenStatus,
-} from "@kb/core";
+import { COLLECTORS, GOOGLE_TOKENS, authFailures, authorizeGoogle, loadConfig, loadState, runCollectors, secureEnvFile, setEnvVar } from "@kb/core";
 
 const ENV_FILE = join(import.meta.dir, "..", ".env");
 const args = process.argv.slice(2);
@@ -40,12 +36,8 @@ async function main() {
     for (const t of targets) {
       console.log(`[${t.label}] ブラウザで Google の同意画面を開きます（127.0.0.1:8789 で受け取ります）…`);
       const { refreshToken, scopes } = await authorizeGoogle(process.env, { scopes: [...t.scopes] });
-      const issuedAt = new Date().toISOString();
       setEnvVar(ENV_FILE, t.envVar, refreshToken);
-      setEnvVar(ENV_FILE, `${t.envVar}_ISSUED_AT`, issuedAt);
-      process.env[`${t.envVar}_ISSUED_AT`] = issuedAt;
-      const { expiresAt } = tokenExpiry(process.env, t.envVar);
-      console.log(`${t.envVar} を ${ENV_FILE} に書き込みました${expiresAt ? `（期限 ${fmt(expiresAt)}）` : ""}。許可されたスコープ:\n  ${scopes.split(" ").join("\n  ")}`);
+      console.log(`${t.envVar} を ${ENV_FILE} に書き込みました。許可されたスコープ:\n  ${scopes.split(" ").join("\n  ")}`);
     }
     return;
   }
@@ -58,8 +50,6 @@ async function main() {
       const st = state[c.id];
       console.log(`${c.id.padEnd(9)} ${ok === true ? "configured" : `skipped: ${ok}`}${st?.lastRunAt ? ` | last run ${st.lastRunAt}` : ""}${st?.lastTo ? ` | collected to ${st.lastTo.slice(0, 10)}` : ""}${st?.lastError ? ` | last error: ${st.lastError}` : ""}`);
     }
-    console.log("");
-    for (const s of tokenStatuses(process.env)) console.log(tokenStatusLine(s));
     return;
   }
 
@@ -74,28 +64,11 @@ async function main() {
     else console.log(`  ${r.id}: ${r.status}${r.reason ? ` — ${r.reason}` : ""}`);
   }
   console.log(`  done in ${((Date.now() - started) / 1000).toFixed(1)}s`);
-  const statuses = tokenStatuses(process.env);
-  if (!dryRun) saveTokenExpiries(cfg, statuses);
-  // a Google token that died shows up as a source failing with invalid_grant naming its env var
-  const dead = (s: TokenStatus) => reports.some((r) => r.status === "failed" && r.reason?.includes(s.envVar) && isExpiredTokenError(r.reason));
-  const warnings = tokenWarnings(statuses, dead, fmt);
+  // only a refused credential is worth a notification: everything else is in the log and the morning digest
+  const warnings = authFailures(reports);
   for (const w of warnings) console.log(`  WARN ${w}`);
   if (warnings.length && !dryRun) notify(warnings.join("\n"));
   if (reports.some((r) => r.status === "failed")) process.exitCode = 1;
-}
-
-const fmt = (d: Date) => d.toLocaleString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
-
-/** One `status` line per credential: issue / expiry / days left, or how to start tracking it. */
-function tokenStatusLine(s: TokenStatus): string {
-  if (!s.configured) return `${s.envVar}: 未設定（${s.id === "github" ? "fine-grained PAT を GITHUB_TOKEN に" : s.renew}）`;
-  if (s.id === "github") {
-    if (!s.expiresAt) return `${s.envVar}: 期限不明（PAT の有効期限を GITHUB_TOKEN_EXPIRES=YYYY-MM-DD に書くと追える）`;
-    return `${s.envVar}: 期限 ${ymd(s.expiresAt)}（${s.daysLeft! > 0 ? `残り ${formatDays(s.daysLeft!)}` : "期限切れ"}）`;
-  }
-  if (!s.issuedAt) return `${s.envVar}: 発行日時不明（${s.renew} で取り直すと期限を追える）`;
-  if (!s.expiresAt) return `${s.envVar}: 発行 ${fmt(s.issuedAt)}（期限なし: GOOGLE_TOKEN_TTL_DAYS=0）`;
-  return `${s.envVar}: 発行 ${fmt(s.issuedAt)} / 期限 ${fmt(s.expiresAt)}（${s.daysLeft! > 0 ? `残り ${formatDays(s.daysLeft!)}` : "期限切れ"}）`;
 }
 
 /** macOS notification (the daily run is launchd: nobody reads its log). Silently skipped elsewhere. */

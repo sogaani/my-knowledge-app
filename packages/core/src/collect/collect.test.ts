@@ -492,17 +492,8 @@ describe("calendar upcoming", () => {
   });
 });
 
-describe("google token lifetime", () => {
-  const { tokenExpiry, isExpiredTokenError, createGoogleAuth } = require("./google") as typeof import("./google");
-  const issued = "2026-10-12T08:00:00.000Z";
-
-  test("Testing consent screen: 7 days from consent; TTL 0 means no expiry; unknown issue date tracks nothing", () => {
-    const e = tokenExpiry({ GOOGLE_REFRESH_TOKEN_ISSUED_AT: issued }, "GOOGLE_REFRESH_TOKEN", new Date("2026-10-18T08:00:00Z"));
-    expect(e.expiresAt!.toISOString()).toBe("2026-10-19T08:00:00.000Z");
-    expect(e.daysLeft).toBe(1);
-    expect(tokenExpiry({ GOOGLE_REFRESH_TOKEN_ISSUED_AT: issued, GOOGLE_TOKEN_TTL_DAYS: "0" }, "GOOGLE_REFRESH_TOKEN").expiresAt).toBeUndefined();
-    expect(tokenExpiry({}, "GOOGLE_REFRESH_TOKEN")).toEqual({ issuedAt: undefined });
-  });
+describe("google auth", () => {
+  const { isExpiredTokenError, createGoogleAuth } = require("./google") as typeof import("./google");
 
   test("invalid_grant from the token endpoint becomes an actionable error", async () => {
     expect(isExpiredTokenError('{"error":"invalid_grant","error_description":"Token has been expired or revoked."}')).toBe(true);

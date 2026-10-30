@@ -7,7 +7,7 @@ import { runQuery, type QueryResult } from "./query";
 import { buildCrossViews } from "./views";
 import { currencyOf, formatMoney, formatTotals, monthlyByCurrency } from "./money";
 import { RECOMMENDATION_TYPE, currentRecommendation, parseSuggestions, readSuggestionBody, suggestionCounts } from "./suggest";
-import { IMPORTED_SUMMARY, bookDate, bookYear, unratedImported } from "./books";
+import { IMPORTED_SUMMARY, STORYGRAPH_SUMMARY, bookDate, bookYear, unratedImported } from "./books";
 import { renderResurface, renderResurfaceHome, resurface } from "./resurface";
 import { listLaterArticles, renderArticlesGold } from "./articles";
 
@@ -60,7 +60,7 @@ export function buildGold(cfg: KbConfig, db: Database): string[] {
     "# 読書", "",
     `- 読了 ${read.length} / 読書中 ${byStatus.reading?.length ?? 0} / 積読 ${byStatus.want?.length ?? 0}`,
     `- 未評価の読了本（取り込み分）: ${unrated.length} 冊`, "",
-    "## 読書中", ...list(byStatus.reading ?? []),
+    "## 読書中", ...list(byStatus.reading ?? [], (b) => (b.fm.started_at ? `（${b.fm.started_at} から）` : "")),
     "", "## 読みたい", ...list(byStatus.want ?? []),
     "", "## 未評価の読了本", "",
     "一括取り込み（`imported: true`）で `rating` の無い読了本。購入日の古い順に 5 冊。週次の `review` が「今週評価する本」に挙げ、評価と 1 行の summary は `log-book` で付ける。", "",
@@ -304,8 +304,8 @@ function link(n: QueryResult): string {
   const p = n.path.endsWith("/README.md") ? n.path.slice(0, -"/README.md".length) + "/README.md" : n.path;
   return `[${n.title}](../${p})`;
 }
-function list(items: QueryResult[]): string[] {
-  return items.length ? items.map((n) => `- ${link(n)}${n.summary && n.summary !== IMPORTED_SUMMARY ? " — " + n.summary : ""}`) : ["- （なし）"];
+function list(items: QueryResult[], extra: (n: QueryResult) => string = () => ""): string[] {
+  return items.length ? items.map((n) => `- ${link(n)}${n.summary && n.summary !== IMPORTED_SUMMARY && n.summary !== STORYGRAPH_SUMMARY ? " — " + n.summary : ""}${extra(n)}`) : ["- （なし）"];
 }
 function group<T>(items: T[], key: (t: T) => string): Record<string, T[]> {
   const out: Record<string, T[]> = {};

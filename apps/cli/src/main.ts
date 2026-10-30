@@ -4,7 +4,7 @@ import { join } from "node:path";
 import {
   loadConfig, openDb, indexNotes, loadSimilar, SchemaRegistry, createNote, DuplicateError, patchFrontmatter, appendToSection,
   ingestFile, ingestUrl, sourceExcerpt, markProcessed, listInbox, putInbox, parseFilters, runQuery, buildGold,
-  validateAll, archiveNote, lint, backupBronze, pruneBronze, logAccess, importPortfolio, importHealth, importLocation, importCalendar, importKoboLibrary, importMail, formatMailImport, runCollectors, type BronzeKind,
+  validateAll, archiveNote, lint, backupBronze, pruneBronze, logAccess, importPortfolio, importHealth, importLocation, importCalendar, importKoboLibrary, importStoryGraphLibrary, isStoryGraphCsv, readMeta, bronzeDir, decodeText, importMail, formatMailImport, runCollectors, type BronzeKind,
   search, VectorStore, embedNotes, makeEmbedder, setupLindera, linderaStatus, resolveTokenizer, readVectorMeta, type SearchMode,
   LAYOUT, curateArticles, buildHistory, listArticleDays, listLaterArticles, articleStats,
 } from "@kb/core";
@@ -20,7 +20,7 @@ function flags(args: string[]) {
     if (a.startsWith("--")) {
       const [k, v] = a.slice(2).split("=");
       if (v !== undefined) f[k] = v;
-      else if (args[i + 1] !== undefined && !args[i + 1].startsWith("--") && ["set", "dest", "kind", "text", "status", "superseded-by", "older-than", "type", "limit", "order", "chars", "title", "folder", "section", "fields", "mode", "account", "max-lookups", "date"].includes(k)) f[k] = args[++i];
+      else if (args[i + 1] !== undefined && !args[i + 1].startsWith("--") && ["set", "dest", "kind", "text", "status", "superseded-by", "older-than", "type", "limit", "order", "chars", "title", "folder", "section", "fields", "mode", "account", "max-lookups", "date", "file"].includes(k)) f[k] = args[++i];
       else f[k] = true;
     } else pos.push(a);
   }
@@ -286,7 +286,20 @@ switch (cmd) {
   case "book": {
     const { f, pos } = flags(argv);
     const [sub, id] = pos;
-    if (sub !== "import" || !id) die("usage: kb book import <bronze-id> [--status want|read]   (a 楽天Kobo library export CSV)");
+    if (sub !== "import" || !id) die("usage: kb book import <bronze-id> [--status want|read]   (a 楽天Kobo library export CSV, or a StoryGraph library export CSV)");
+    const meta = readMeta(cfg, id!);
+    const csv = meta?.files.find((n) => /\.csv$/i.test(n));
+    if (!meta || !csv) die(`${id} is not a CSV in Bronze`);
+    if (isStoryGraphCsv(decodeText(readFileSync(join(bronzeDir(cfg, id!), csv!))))) {
+      // StoryGraph: the reading record (status / dates / rating / review) is upserted, so it reports every outcome
+      const r = importStoryGraphLibrary(cfg, reg, db(), id!);
+      if (f.json) { json(r); break; }
+      for (const c of r.created) console.log(`created ${c.path}`);
+      for (const u of r.updated) console.log(`updated ${u.path} (${u.changes.join(", ")})`);
+      for (const k of r.kept) console.log(`kept    ${k.path} (read in 204_books, ${k.readStatus} on StoryGraph)`);
+      console.log(`${r.created.length} created, ${r.updated.length} updated, ${r.unchanged.length} unchanged, ${r.kept.length} kept (from ${r.bronzeId})`);
+      break;
+    }
     const r = importKoboLibrary(cfg, reg, db(), id!, { status: f.status ? String(f.status) : undefined });
     for (const c of r.created) console.log(`created ${c.path}`);
     console.log(`${r.created.length} created, ${r.skipped.length} already in 204_books (from ${r.bronzeId})`);
@@ -401,7 +414,7 @@ switch (cmd) {
   location import <bronze-id> [--max-lookups 300] [--all]   Google Maps Timeline export → monthly location_log (Places API, 70-day cache)
   collect [source...] [--dry-run]    run collectors into 000_inbox (secrets: use \`bun run collect\` with apps/collector/.env)
   portfolio import <csv|bronze-id> [--account 楽天証券]   update the portfolio note from a 楽天証券 asset CSV (CP932 ok)
-  book import <bronze-id> [--status want|read]   book notes (imported: true, purchased_at) from a 楽天Kobo library export CSV; existing titles are skipped
+  book import <bronze-id> [--status want|read]   楽天Kobo library export CSV → new book notes (imported: true, purchased_at; existing titles skipped); StoryGraph export CSV → status / started_at / finished_at / rating / review upserted by ISBN or title (a read book never goes back to want)
   mail import <bronze-id>... | --all [--dry-run] [--json]   Gmail items: routine notices (900_system/mail-rules.json) → processed -; money mails → ledger candidates (amount / date / merchant) matched against the ledger
   query [type=book rating>=4] [--text "..."] [--include-archive] [--json] [--limit n] [--order -updated]
   search "<query>" [type=book ...] [--mode hybrid|vector|keyword] [--limit 10] [--include-archive] [--spoilers] [--json]

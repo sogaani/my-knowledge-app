@@ -9,7 +9,7 @@ import { runQuery } from "./query";
 import { readMeta } from "./bronze";
 import { SchemaRegistry } from "./schema";
 import { buildGold } from "./build";
-import { IMPORTED_SUMMARY, bookYear, importKoboLibrary, parseImportedSummary, parseKoboCsv, unratedImported } from "./books";
+import { IMPORTED_SUMMARY, STORYGRAPH_SUMMARY, bookYear, importKoboLibrary, importStoryGraphLibrary, isKoboCsv, isStoryGraphCsv, isbn13, parseDatesRead, parseImportedSummary, parseKoboCsv, parseStoryGraphCsv, unratedImported } from "./books";
 
 /** Throwaway data repo: book schema + template, a few book notes, a Kobo library export in Bronze (fixture only). */
 function fixture() {
@@ -33,6 +33,7 @@ function fixture() {
   note("200_silver/204_books/取込D.md", { ...base, title: "取込D", summary: "読み直した", imported: true, purchased_at: "2025-01-05", rating: 5 });
   note("200_silver/204_books/日付なしE.md", { ...base, title: "日付なしE", summary: "" });
   note("200_silver/204_books/積読F.md", { ...base, title: "積読F", status: "want", summary: "", imported: true, purchased_at: "2026-10-01" });
+  note("200_silver/204_books/読中S.md", { ...base, title: "読中S", status: "reading", summary: STORYGRAPH_SUMMARY, imported: true, started_at: "2026-10-20" });
   const csv = [
     "productId,isbn,adultType,title,authorName,companyName,imageUrl,detailUrl,addDate",
     '"p1","8932131710500","1","取込B","著者B","社B","https://img/1.jpg","https://books.example/p1","2025-03-01 19:18:52"', // already a note (title)
@@ -81,7 +82,7 @@ describe("runQuery on book fields", () => {
     const titles = (filters: string[]) => runQuery(db, {
       filters: filters.map((t) => { const [field, value] = t.split("="); return { field, op: "=" as const, value }; }), orderBy: "title",
     }).map((b) => b.title);
-    expect(titles(["imported=true"])).toEqual(["取込B", "取込C", "取込D", "積読F"]);
+    expect(titles(["imported=true"])).toEqual(["取込B", "取込C", "取込D", "積読F", "読中S"]);
     expect(titles(["status=read", "imported=true", "rating="])).toEqual(["取込B", "取込C"]);
     expect(runQuery(db, { filters: [{ field: "rating", op: "!=", value: "" }], orderBy: "title" }).map((b) => b.title)).toEqual(["取込D", "読了A"]);
   });
@@ -100,7 +101,8 @@ describe("buildGold 304_books", () => {
     expect(gold("unknown.md")).toContain("- 1 冊（読了日も購入日も無い本）");
     expect(gold("unknown.md")).toContain("[日付なしE]");
     const index = gold("index.md");
-    expect(index).toContain("- 読了 5 / 読書中 0 / 積読 1");
+    expect(index).toContain("- 読了 5 / 読書中 1 / 積読 1");
+    expect(index).toContain("## 読書中\n- [読中S](../../200_silver/204_books/読中S.md)（2026-10-20 から）\n");
     expect(index).toContain("- 未評価の読了本（取り込み分）: 2 冊");
     expect(index).toContain("## 未評価の読了本");
     expect(index).toContain("- [取込C](../../200_silver/204_books/取込C.md) — 著者C（2024-12-31 購入）\n- [取込B](../../200_silver/204_books/取込B.md) — 著者B（2025-03-01 購入）");
@@ -134,5 +136,83 @@ describe("importKoboLibrary", () => {
     const { cfg, db, reg } = fixture();
     expect(() => importKoboLibrary(cfg, reg, db, "20261013-file-nonono")).toThrow("not a CSV");
     expect(() => parseKoboCsv("a,b,c\n1,2,3\n")).toThrow("not a Kobo library export");
+  });
+});
+
+const SG_HEADER = "Title,Authors,Contributors,ISBN/UID,Format,Read Status,Date Added,Last Date Read,Dates Read,Read Count,Moods,Pace,Character- or Plot-Driven?,Strong Character Development?,Loveable Characters?,Diverse Characters?,Flawed Characters?,Star Rating,Review,Content Warnings,Content Warning Description,Tags,Owned?";
+const SG_CSV = [
+  SG_HEADER,
+  // already read in 204_books with the same date and a 4: nothing to change (4.25 rounds to 4)
+  '読了A,著者A,"",9784000000011,digital,read,2026/09/01,2026/10/02,2026/09/20-2026/10/02,1,"",,,,,,,4.25,"","",,"",No',
+  // on the shelf as want: now being read since 10/20
+  '積読F,著者F,"",,,currently-reading,2026/10/19,"",2026/10/20-,0,"",,,,,,,,,"",,"",No',
+  // read in 204_books but back on StoryGraph as to-read: left alone
+  '取込D,著者D,"",,,to-read,2026/10/25,"","",0,"",,,,,,,,,"",,"",No',
+  // new: ISBN-10, paperback, two reads, a multi-line review, 3.75 stars, tags
+  '新刊Z,著者Z,"訳者Z (Translator)",4062766450,paperback,read,2026/10/01,2026/10/28,"2025/01/02-2025/01/10, 2026/10/21-2026/10/28",2,"dark, tense",fast,,,,,,3.75,"一気読み。\n""二度目""も良い。","",,"mystery, 再読",Yes',
+  // new: did not finish, audio, no dates
+  '途中Y,著者Y,"",,audio,did-not-finish,2026/10/02,"","",0,"",,,,,,,,,"",,"",No',
+].join("\n");
+
+describe("StoryGraph export", () => {
+  test("header detection, dates read, ISBN-10 → 13", () => {
+    expect(isStoryGraphCsv(SG_CSV)).toBe(true);
+    expect(isStoryGraphCsv("\uFEFF" + SG_CSV)).toBe(true);
+    expect(isKoboCsv(SG_CSV)).toBe(false);
+    expect(isKoboCsv('"productId","isbn","title"\n')).toBe(true);
+    expect(parseDatesRead("2026/09/20-2026/10/02", "2026/10/02")).toEqual({ startedAt: "2026-09-20", finishedAt: "2026-10-02" });
+    expect(parseDatesRead("2025/01/02-2025/01/10, 2026/10/21-2026/10/28", "")).toEqual({ startedAt: "2026-10-21", finishedAt: "2026-10-28" });
+    expect(parseDatesRead("2026/10/20-", "")).toEqual({ startedAt: "2026-10-20", finishedAt: "" });
+    expect(parseDatesRead("-2026/10/20", "")).toEqual({ startedAt: "", finishedAt: "2026-10-20" });
+    expect(parseDatesRead("", "2026/10/02")).toEqual({ startedAt: "", finishedAt: "2026-10-02" });
+    expect(isbn13("4062766450")).toBe("9784062766456");
+    expect(isbn13("9784062766456")).toBe("9784062766456");
+    expect(isbn13("7275000572538")).toBe("7275000572538");
+    expect(() => parseStoryGraphCsv("productId,isbn\n")).toThrow(/not a StoryGraph/);
+  });
+
+  test("rows: status map, rounded stars, review with newlines and doubled quotes, tags", () => {
+    const rows = parseStoryGraphCsv(SG_CSV);
+    expect(rows.map((r) => [r.title, r.status, r.readStatus, r.startedAt, r.finishedAt, r.rating, r.readCount])).toEqual([
+      ["読了A", "read", "read", "2026-09-20", "2026-10-02", 4, 1],
+      ["積読F", "reading", "currently-reading", "2026-10-20", "", 0, 0],
+      ["取込D", "want", "to-read", "", "", 0, 0],
+      ["新刊Z", "read", "read", "2026-10-21", "2026-10-28", 4, 2],
+      ["途中Y", "dnf", "did-not-finish", "", "", 0, 0],
+    ]);
+    expect(rows[3]).toMatchObject({ author: "著者Z", isbn: "4062766450", format: "paperback", review: '一気読み。\n"二度目"も良い。', tags: ["mystery", "再読"] });
+  });
+
+  test("import upserts: unchanged / updated / kept / created, review into an empty 感想, processed marked", () => {
+    const { cfg, db, reg } = fixture();
+    mkdirSync(join(cfg.root, "100_bronze/2026/10/20261030-file-sg0001"), { recursive: true });
+    writeFileSync(join(cfg.root, "100_bronze/2026/10/20261030-file-sg0001/export.csv"), SG_CSV);
+    writeFileSync(join(cfg.root, "100_bronze/2026/10/20261030-file-sg0001/meta.json"), JSON.stringify({ id: "20261030-file-sg0001", kind: "file", source: "export.csv", captured_at: "2026-10-30T00:00:00Z", sha256: "0", files: ["export.csv"], processed_to: [] }));
+    const r = importStoryGraphLibrary(cfg, reg, db, "20261030-file-sg0001");
+    expect(r.unchanged).toEqual([]);
+    expect(r.updated).toEqual([
+      { path: "200_silver/204_books/読了A.md", title: "読了A", changes: ["started_at=2026-09-20", "isbn"] }, // same status / date / rating: only what the note lacked
+      { path: "200_silver/204_books/積読F.md", title: "積読F", changes: ["status=reading", "started_at=2026-10-20"] },
+    ]);
+    expect(parseNote(readFileSync(join(cfg.root, "200_silver/204_books/読了A.md"), "utf8")).fm).toMatchObject({ status: "read", rating: 4, finished_at: "2026-10-02", started_at: "2026-09-20", isbn: "9784000000011", summary: "感想あり" });
+    expect(r.kept).toEqual([{ path: "200_silver/204_books/取込D.md", title: "取込D", readStatus: "to-read" }]);
+    expect(r.created.map((c) => c.title)).toEqual(["新刊Z", "途中Y"]);
+    const f = parseNote(readFileSync(join(cfg.root, "200_silver/204_books/積読F.md"), "utf8")).fm;
+    expect(f).toMatchObject({ status: "reading", started_at: "2026-10-20", imported: true });
+    expect(f.updated).not.toBe("2026-10-12");
+    expect(parseNote(readFileSync(join(cfg.root, "200_silver/204_books/取込D.md"), "utf8")).fm.status).toBe("read");
+    const z = parseNote(readFileSync(join(cfg.root, "200_silver/204_books/新刊Z.md"), "utf8"));
+    expect(z.fm).toMatchObject({ status: "read", author: "著者Z", isbn: "4062766450", platform: "紙", started_at: "2026-10-21", finished_at: "2026-10-28", rating: 4, imported: true, summary: STORYGRAPH_SUMMARY, sources: ["20261030-file-sg0001"] });
+    expect(z.body).toContain('## 感想（ネタバレなし）\n\n一気読み。\n"二度目"も良い。\n');
+    const y = parseNote(readFileSync(join(cfg.root, "200_silver/204_books/途中Y.md"), "utf8")).fm;
+    expect(y).toMatchObject({ status: "dnf", platform: "audio" });
+    expect(y.started_at).toBeUndefined();
+    expect(readMeta(cfg, "20261030-file-sg0001")!.processed_to.sort()).toEqual(["200_silver/204_books/新刊Z.md", "200_silver/204_books/積読F.md", "200_silver/204_books/途中Y.md", "200_silver/204_books/読了A.md"].sort());
+    // second run with the same export: nothing changes, the created notes are matched by ISBN-13 / title
+    indexNotes(cfg, db);
+    const again = importStoryGraphLibrary(cfg, reg, db, "20261030-file-sg0001");
+    expect(again.created).toEqual([]);
+    expect(again.updated).toEqual([]);
+    expect(again.unchanged.map((u) => u.title).sort()).toEqual(["新刊Z", "積読F", "読了A", "途中Y"].sort());
   });
 });

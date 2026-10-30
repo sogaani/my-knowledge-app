@@ -7,6 +7,3 @@ dist/
 .DS_Store
 .local/
 *.tsbuildinfo
-
-# Playwright persistent browser profiles (collector: StoryGraph login session)
-.playwright/

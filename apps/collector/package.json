@@ -3,7 +3,6 @@
   "version": "0.1.0",
   "type": "module",
   "dependencies": {
-    "@kb/core": "workspace:*",
-    "playwright": "^1.64.1"
+    "@kb/core": "workspace:*"
   }
 }

@@ -15,16 +15,19 @@ import type { Collector, Env } from "./types";
 
 export const ACCOUNT_RE = /^[a-z0-9]+$/;
 
-/** Sources an extra Google account can run (GOOGLE_SOURCES__<name>; `gmail` brings `gmail-review` along). */
-export const GOOGLE_ACCOUNT_SOURCES = ["gmail", "gmail-review", "calendar", "youtube"] as const;
+/** Sources a Google account can run (GOOGLE_SOURCES / GOOGLE_SOURCES__<name>; `gmail` brings `gmail-review` along). */
+export const GOOGLE_ACCOUNT_SOURCES = ["gmail", "gmail-review", "calendar", "youtube", "meet"] as const;
 export type GoogleAccountSource = (typeof GOOGLE_ACCOUNT_SOURCES)[number];
+/** What an unset GOOGLE_SOURCES means: the classic four. `meet` is opt-in (extra scope, usually a work account). */
+export const DEFAULT_GOOGLE_SOURCES: GoogleAccountSource[] = ["gmail", "gmail-review", "calendar", "youtube"];
 
-/** Consent scope each Google source needs (an extra account only asks for the scopes of the sources it runs). */
+/** Consent scope each Google source needs (a consent only asks for the scopes of the sources the account runs). */
 export const GOOGLE_SOURCE_SCOPES: Record<GoogleAccountSource, string> = {
   gmail: "https://www.googleapis.com/auth/gmail.modify",
   "gmail-review": "https://www.googleapis.com/auth/gmail.modify",
   calendar: "https://www.googleapis.com/auth/calendar.readonly",
   youtube: "https://www.googleapis.com/auth/youtube.readonly",
+  meet: "https://www.googleapis.com/auth/meetings.space.readonly",
 };
 
 /** Per-account variables: for account <name> they come from KEY__<name>; the default account's value is not inherited. */
@@ -63,15 +66,15 @@ export const googleAccounts = (env: Env) => accountsWith(env, "GOOGLE_REFRESH_TO
 /** Names of the extra GitHub accounts (those with a GITHUB_TOKEN__<name>). */
 export const githubAccounts = (env: Env) => accountsWith(env, "GITHUB_TOKEN");
 
-/** Parse a GOOGLE_SOURCES value (`gmail,calendar`): unknown names are dropped, `gmail` adds `gmail-review`, unset = all. */
+/** Parse a GOOGLE_SOURCES value (`gmail,calendar,meet`): unknown names dropped, `gmail` adds `gmail-review`, unset = the classic four. */
 export function parseGoogleSources(value: string | undefined): GoogleAccountSource[] {
-  if (!value?.trim()) return [...GOOGLE_ACCOUNT_SOURCES];
+  if (!value?.trim()) return [...DEFAULT_GOOGLE_SOURCES];
   const set = new Set(value.split(",").map((s) => s.trim()).filter((s): s is GoogleAccountSource => (GOOGLE_ACCOUNT_SOURCES as readonly string[]).includes(s)));
   if (set.has("gmail")) set.add("gmail-review");
   return GOOGLE_ACCOUNT_SOURCES.filter((s) => set.has(s));
 }
 
-/** The Google sources an extra account runs (GOOGLE_SOURCES__<name>, default: all four). */
+/** The Google sources an extra account runs (GOOGLE_SOURCES__<name>, default: the classic four). */
 export const googleSourcesOf = (env: Env, account: string) => parseGoogleSources(env[`GOOGLE_SOURCES__${account}`]);
 
 /** Scopes to ask for at consent, for the sources an account runs. */

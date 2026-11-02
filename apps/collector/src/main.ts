@@ -4,7 +4,7 @@
  *   bun run collect [source...] [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--dry-run]   (source: `calendar` = every account, `calendar@work` = one)
  *   bun run collect status
  *   bun run collect auth [google | google-health]   (no name: both, one after the other)
- *   bun run collect auth google --account <name> [--sources gmail,calendar]   (an extra Google account; see core collect/accounts.ts)
+ *   bun run collect auth google --account <name> [--sources gmail,calendar,meet]   (an extra Google account; see core collect/accounts.ts)
  * No credential expiry is tracked: when a source fails because Google or GitHub refused its token, the daily run sends
  * a macOS notification naming the credential (`bun run collect auth` renews the Google ones). Every command chmods
  * the .env to 0600.
@@ -37,7 +37,7 @@ async function main() {
       if (!ACCOUNT_RE.test(account)) throw new Error(`--account must match ${ACCOUNT_RE} (got ${JSON.stringify(account)})`);
       if (args[1] && args[1] !== "google") throw new Error(`only \`auth google --account ${account}\` is supported (Google Health is single-account)`);
       const sources = parseGoogleSources(sourcesArg ?? process.env[`GOOGLE_SOURCES__${account}`]);
-      if (!sources.length) throw new Error(`--sources must name at least one of gmail, calendar, youtube`);
+      if (!sources.length) throw new Error(`--sources must name at least one of gmail, calendar, youtube, meet`);
       console.log(`[Google ${account}: ${sources.join(", ")}] ブラウザで Google の同意画面を開きます（127.0.0.1:8789 で受け取ります）。そのアカウントでログインしてください…`);
       const { refreshToken, scopes } = await authorizeGoogle(process.env, { scopes: scopesFor(sources) });
       setEnvVar(ENV_FILE, `GOOGLE_REFRESH_TOKEN__${account}`, refreshToken);
@@ -45,14 +45,19 @@ async function main() {
       console.log(`GOOGLE_REFRESH_TOKEN__${account}${sourcesArg !== undefined ? ` と GOOGLE_SOURCES__${account}` : ""} を ${ENV_FILE} に書き込みました。許可されたスコープ:\n  ${scopes.split(" ").join("\n  ")}`);
       return;
     }
-    // Gmail / Calendar / YouTube share one token; the Health API needs a token with health scopes only
+    // Gmail / Calendar / YouTube (/ Meet when opted in) share one token; the Health API needs a token with health scopes only
     const targets = args[1] ? GOOGLE_TOKENS.filter((t) => t.name === args[1]) : [...GOOGLE_TOKENS];
-    if (!targets.length) throw new Error(`usage: bun run collect auth [${GOOGLE_TOKENS.map((t) => t.name).join(" | ")}] | auth google --account <name> [--sources gmail,calendar]`);
+    if (!targets.length) throw new Error(`usage: bun run collect auth [${GOOGLE_TOKENS.map((t) => t.name).join(" | ")}] [--sources gmail,calendar,youtube,meet] | auth google --account <name> [--sources …]`);
     for (const t of targets) {
-      console.log(`[${t.label}] ブラウザで Google の同意画面を開きます（127.0.0.1:8789 で受け取ります）…`);
-      const { refreshToken, scopes } = await authorizeGoogle(process.env, { scopes: [...t.scopes] });
+      // the default account's GOOGLE_SOURCES (or --sources) narrows / widens the consent the same way as an extra account's
+      const sourcesValue = t.name === "google" ? (sourcesArg ?? process.env.GOOGLE_SOURCES) : undefined;
+      const scopes = sourcesValue ? scopesFor(parseGoogleSources(sourcesValue)) : [...t.scopes];
+      if (!scopes.length) throw new Error(`--sources must name at least one of gmail, calendar, youtube, meet`);
+      console.log(`[${t.label}${sourcesValue ? `: ${parseGoogleSources(sourcesValue).join(", ")}` : ""}] ブラウザで Google の同意画面を開きます（127.0.0.1:8789 で受け取ります）…`);
+      const { refreshToken, scopes: granted } = await authorizeGoogle(process.env, { scopes });
       setEnvVar(ENV_FILE, t.envVar, refreshToken);
-      console.log(`${t.envVar} を ${ENV_FILE} に書き込みました。許可されたスコープ:\n  ${scopes.split(" ").join("\n  ")}`);
+      if (t.name === "google" && sourcesArg !== undefined) setEnvVar(ENV_FILE, "GOOGLE_SOURCES", parseGoogleSources(sourcesArg).join(","));
+      console.log(`${t.envVar} を ${ENV_FILE} に書き込みました。許可されたスコープ:\n  ${granted.split(" ").join("\n  ")}`);
     }
     return;
   }

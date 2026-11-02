@@ -698,3 +698,97 @@ describe("runCollectors with extra accounts", () => {
     await expect(runCollectors(mkCfg(), env, { now, log, collectors: [calendar], only: ["calendar@home"] })).rejects.toThrow("unknown source");
   });
 });
+
+describe("meet", () => {
+  const { meet, mergeEntries } = require("./sources/meet") as typeof import("./sources/meet");
+  const google = { configured: true as const, accessToken: async () => "tok" };
+  const log = { info() {}, warn() {} };
+
+  test("opt-in through GOOGLE_SOURCES", () => {
+    expect(meet.configured({})).toContain("missing GOOGLE_REFRESH_TOKEN");
+    expect(meet.configured({ GOOGLE_REFRESH_TOKEN: "x" })).toContain("not in GOOGLE_SOURCES");
+    expect(meet.configured({ GOOGLE_REFRESH_TOKEN: "x", GOOGLE_SOURCES: "calendar,meet" })).toBe(true);
+  });
+
+  test("consecutive entries of one speaker merge; unknown participants are named so", () => {
+    const names = new Map([["conferenceRecords/c/participants/1", "田中"]]);
+    expect(mergeEntries([
+      { name: "e2", participant: "conferenceRecords/c/participants/1", text: "続きです", startTime: "2026-11-02T01:00:05Z" },
+      { name: "e1", participant: "conferenceRecords/c/participants/1", text: "はじめに ", startTime: "2026-11-02T01:00:00Z" },
+      { name: "e3", participant: "conferenceRecords/c/participants/9", text: "了解", startTime: "2026-11-02T01:00:09Z" },
+      { name: "e4", participant: "conferenceRecords/c/participants/9", text: "  ", startTime: "2026-11-02T01:00:10Z" },
+    ], names)).toEqual([
+      { at: "2026-11-02T01:00:00Z", who: "田中", text: "はじめに 続きです" },
+      { at: "2026-11-02T01:00:09Z", who: "(不明)", text: "了解" },
+    ]);
+  });
+
+  test("collect: ended conferences in the window, title from the calendar, transcript entries, no-transcript meeting kept", async () => {
+    const urls: string[] = [];
+    const http = {
+      async fetch(): Promise<Response> { throw new Error("unused"); },
+      async json<T>(url: string): Promise<T> {
+        urls.push(url);
+        const u = new URL(url);
+        const p = u.pathname;
+        if (p === "/v2/conferenceRecords") {
+          expect(u.searchParams.get("filter")).toBe('end_time>="2026-10-27T00:00:00.000Z" AND end_time<"2026-11-03T00:00:00.000Z"');
+          return { conferenceRecords: [
+            { name: "conferenceRecords/b", startTime: "2026-11-02T05:00:00Z", endTime: "2026-11-02T05:20:00Z", space: "spaces/sb" },
+            { name: "conferenceRecords/a", startTime: "2026-11-02T01:00:00Z", endTime: "2026-11-02T01:45:00Z", space: "spaces/sa" },
+          ] } as T;
+        }
+        if (p === "/v2/spaces/sa") return { name: "spaces/sa", meetingCode: "abc-defg-hij", meetingUri: "https://meet.google.com/abc-defg-hij" } as T;
+        if (p === "/v2/spaces/sb") throw new Error("HTTP 404");
+        if (p.endsWith("/participants")) return { participants: p.includes("/a/") ? [
+          { name: "conferenceRecords/a/participants/1", signedinUser: { user: "users/1", displayName: "田中" } },
+          { name: "conferenceRecords/a/participants/2", anonymousUser: { displayName: "ゲスト" } },
+        ] : [{ name: "conferenceRecords/b/participants/1", signedinUser: { displayName: "田中" } }] } as T;
+        if (p.endsWith("/transcripts")) return (p.includes("/a/") ? { transcripts: [{ name: "conferenceRecords/a/transcripts/t1", state: "FILE_GENERATED", docsDestination: { document: "doc1", exportUri: "https://docs.google.com/document/d/doc1/edit" } }] } : { transcripts: [] }) as T;
+        if (p.endsWith("/entries")) {
+          const page = u.searchParams.get("pageToken");
+          return (page ? { transcriptEntries: [{ name: "e2", participant: "conferenceRecords/a/participants/2", text: "質問です", languageCode: "ja-JP", startTime: "2026-11-02T01:05:00Z" }] }
+            : { transcriptEntries: [{ name: "e1", participant: "conferenceRecords/a/participants/1", text: "今日の議題は", languageCode: "ja-JP", startTime: "2026-11-02T01:00:10Z" }], nextPageToken: "p2" }) as T;
+        }
+        if (p.endsWith("/recordings")) return { recordings: p.includes("/a/") ? [{ name: "r", state: "FILE_GENERATED", driveDestination: { file: "f", exportUri: "https://drive.google.com/file/d/f/view" } }] : [] } as T;
+        if (p === "/calendar/v3/calendars/primary/events") return { items: [{ summary: "週次定例", conferenceData: { conferenceId: "abc-defg-hij" } }, { summary: "no meet" }] } as T;
+        throw new Error(`unexpected ${url}`);
+      },
+    };
+    const r = await meet.collect({ cfg: {} as KbConfig, env: {}, http, google, log, dryRun: false, cursor: undefined, from: new Date("2026-10-27T00:00:00Z"), to: new Date("2026-11-03T00:00:00Z") });
+    expect(r.meta).toEqual({ conferences: 2, with_transcript: 1 });
+    const [a, b] = r.items as import("./sources/meet").MeetItem[];
+    expect(a).toMatchObject({ record: "conferenceRecords/a", meeting_code: "abc-defg-hij", title: "週次定例", minutes: 45, participants: ["田中", "ゲスト"], recordings: ["https://drive.google.com/file/d/f/view"] });
+    expect(a!.transcript).toEqual({ document: "doc1", export_uri: "https://docs.google.com/document/d/doc1/edit", language: "ja-JP", entries: [
+      { at: "2026-11-02T01:00:10Z", who: "田中", text: "今日の議題は" }, { at: "2026-11-02T01:05:00Z", who: "ゲスト", text: "質問です" },
+    ] });
+    expect(b).toMatchObject({ record: "conferenceRecords/b", minutes: 20, participants: ["田中"], recordings: [] });
+    expect(b!.title).toBeUndefined();
+    expect(b!.transcript).toBeUndefined();
+    const lines = meet.digest(a).split("\n");
+    expect(lines[0]).toMatch(/^2026-11-02 \d\d:\d\d–\d\d:\d\d 週次定例（45 分・2 人・発言 2 件） abc-defg-hij 録画あり$/);
+    expect(lines[1]).toMatch(/^    \d\d:\d\d 田中: 今日の議題は$/);
+    expect(meet.digest(b)).toMatch(/（予定名不明）（20 分・1 人・文字起こしなし）$/);
+    // the calendar lookup happened once, with the window widened by a day on both sides
+    const cal = urls.filter((x) => x.includes("/calendar/"));
+    expect(cal.length).toBe(1);
+    expect(new URL(cal[0]!).searchParams.get("timeMin")).toBe("2026-10-26T00:00:00.000Z");
+  });
+
+  test("collect: the calendar lookup failing only drops the titles", async () => {
+    const http = {
+      async fetch(): Promise<Response> { throw new Error("unused"); },
+      async json<T>(url: string): Promise<T> {
+        const p = new URL(url).pathname;
+        if (p === "/v2/conferenceRecords") return { conferenceRecords: [{ name: "conferenceRecords/a", startTime: "2026-11-02T01:00:00Z", endTime: "2026-11-02T01:30:00Z" }] } as T;
+        if (p.includes("/calendar/")) throw new Error("HTTP 403 insufficient scope");
+        return {} as T;
+      },
+    };
+    const warned: string[] = [];
+    const r = await meet.collect({ cfg: {} as KbConfig, env: {}, http, google, log: { info() {}, warn: (m) => { warned.push(m); } }, dryRun: false, cursor: undefined, from: new Date("2026-10-27T00:00:00Z"), to: new Date("2026-11-03T00:00:00Z") });
+    expect(r.items).toHaveLength(1);
+    expect((r.items![0] as { title?: string }).title).toBeUndefined();
+    expect(warned[0]).toContain("calendar titles unavailable");
+  });
+});

@@ -47,6 +47,7 @@ ingest は「WebUI の投げ込み 1 件 = 1 ジョブ」で、同じ時間帯�
 | `github` | ①検索 API: 自分が作った Issue / PR、自分のコミット（コミット検索はデフォルトブランチしか索引されない）②`/users/:login/events`: push（全ブランチ。検索で出たコミットは push から除く。push の commits が空になれば捨てる）・PR レビュー（`PullRequestReviewEvent`）・star（`WatchEvent`）。events は新しい順・最大 300 件・直近 30 日程度なので、カーソルは最後に見た event id（初回は窓の中の event）。PAT に `Events`（ユーザー権限、Read）が無いと公開イベントだけになる | fine-grained PAT（読み取り専用） | ①前回の終わり〜今 ②event id |
 | `calendar` | 表示中のカレンダー（または `GOOGLE_CALENDAR_IDS`）の予定。キャンセル・辞退は除く。①実績: 前回の終わり〜今に行われた予定 ②将来: 今〜2 年後（`GOOGLE_CALENDAR_HORIZON_DAYS` で変更可）を毎回取得し、前回から新規・変更・削除になった予定だけを出す（繰り返しはシリーズで 1 件） | Google OAuth | ①前回の終わり〜今 ②今〜2 年後の差分 |
 | `youtube` | 高評価した動画（前回からの差分）と `YOUTUBE_PLAYLIST_IDS` の再生リスト | Google OAuth | 差分（カーソルに既知 ID） |
+| `meet` | Google Meet で前回の終わり〜今に**終わった**会議（Meet REST API の `conferenceRecords`）。会議ごとに 開始・終了・参加者の表示名・会議コード・予定名（主カレンダーの同じ会議コードの予定から。無ければ無題）と、文字起こしがあれば発言単位のテキスト（話者付き。同じ話者の連続発言は 1 つに）。録画は Drive のリンクだけ。文字起こしの無い会議も 1 件として残る。**opt-in**: `GOOGLE_SOURCES`（既定アカウント）/ `GOOGLE_SOURCES__<name>` に `meet` を書いたときだけ動く（スコープ `meetings.space.readonly` が増えるので同意し直す）。API の発言テキストは会議から 30 日で消える | Google OAuth（`meetings.space.readonly`。予定名の引き当ては `calendar.readonly` があれば） | 前回の終わり〜今（終了時刻で区切る。進行中の会議は次回） |
 | `health` | Google Health API v4 の日別 歩数・距離・消費カロリー・アクティブ時間（`dailyRollUp`）と睡眠（起床日で集計） | Google OAuth（`googlehealth.*.readonly` だけの別トークン。Health API は他のスコープを含むトークンを 403 で拒否する） | 完了した日だけ（昨日まで） |
 | `linkedin` | inbox に置かれた `*LinkedInDataExport*.zip` のプロフィール・職歴・新しいつながり・新しいメッセージ | なし（ZIP を手で置く） | 前回のエクスポートとの差分 |
 | `rss` | `FEED_URLS`（カンマ・空白・改行区切り）の RSS 2.0 / RSS 1.0 / Atom フィード。新着のあるフィードごとに `collect-rss-<slug>-<from>_<to>.json`（slug は URL のホスト + パス。`meta` にフィードの URL と題名）。項目は題名・URL・日付・要約の先頭 300 字だけ。フィードの要約が薄いもの（Hacker News の "Comments" のように 40 字未満や定型句）だけは記事ページを取って本文冒頭 300 字を要約にする（`summary_source: "page"`。1 回の実行で 40 ページまで、同時 4、失敗したホストは再試行しない）。それ以上の本文は取らない（選別は `curate`、取り込みは WebUI の「取り込む」）。パースは Bun 標準の正規表現で素朴に行う（CDATA・実体参照・Atom の `type="html"` は扱う。複雑な XML は想定しない）。1 つのフィードが落ちても他は続け（`WARN` をログに出す）、全部落ちたときだけ失敗 | なし | 差分（カーソルにフィードごとの既知 entry id。初回は窓の中の entry、日付の無いフィードは新しい 50 件） |
@@ -109,13 +110,14 @@ Google と GitHub は、既定のアカウントのほかに名前付きのア�
 | 変数 | 意味 |
 |---|---|
 | `GOOGLE_REFRESH_TOKEN__work` | そのアカウントのリフレッシュトークン。`bun run collect auth google --account work --sources gmail,calendar` がブラウザの同意（そのアカウントでログインする）から書き込む。OAuth クライアント（`GOOGLE_CLIENT_ID/SECRET`）は共用 |
-| `GOOGLE_SOURCES__work` | そのアカウントで動かすソース（`gmail` / `calendar` / `youtube` のカンマ区切り。`gmail` は週次の `gmail-review` も含む。`GMAIL_REVIEW__work=off` で止める）。未設定なら全部。`auth … --sources` が書く。同意で求めるスコープもこの範囲だけ |
+| `GOOGLE_SOURCES__work` | そのアカウントで動かすソース（`gmail` / `calendar` / `youtube` / `meet` のカンマ区切り。`gmail` は週次の `gmail-review` も含む。`GMAIL_REVIEW__work=off` で止める）。未設定なら `meet` 以外の全部。`auth … --sources` が書く。同意で求めるスコープもこの範囲だけ。既定アカウントも `GOOGLE_SOURCES`（接尾辞なし）で同じことができる（`meet` を足すときに使う。`bun run collect auth google --sources gmail,calendar,youtube,meet`） |
 | `GOOGLE_CALENDAR_IDS__work` など | 既定アカウントの `GOOGLE_CALENDAR_IDS` / `GOOGLE_CALENDAR_HORIZON_DAYS` / `YOUTUBE_PLAYLIST_IDS` / `GMAIL` / `GMAIL_REVIEW` はそのアカウントには効かない（必要なら `__work` 付きで書く） |
 | `GITHUB_TOKEN__work` / `GITHUB_LOGIN__work` | 別アカウントでログインして作った fine-grained PAT（権限は `GITHUB_TOKEN` と同じ） |
 
 - 動き: ソースはアカウントごとに別のインスタンスになる。id は `calendar@work`、`collect-state.json` のカーソルも別、inbox のファイル名は拡張子の前に `@work`（`collect-calendar-<from>_<to>@work.json`、`mail-YYYYMMDD-<category>-<id>@work.json`）。フィードの JSON には `account: "work"`、Gmail の JSON にも `account` が入り、`kb source` の見出しに「（アカウント work）」と出る。`ingest` が振り分けに使う `collect-calendar-*` / `mail-*-<category>-*` の形はそのまま合う（`@work` は `-work-` ではないので `KB/作業` のカテゴリとも混ざらない）。
 - `bun run collect calendar` は全アカウントの calendar、`bun run collect calendar@work` はその 1 つだけ。`status`・運用ダイジェストの「収集:」行・認証失敗の通知（「Google work の認証に失敗しました（gmail@work）。bun run collect auth google --account work」）も `@work` 付きで出る。
 - Google Health は追加アカウントを持たない（月次 `health_log` が歩数などを合計するので二重計上になる）。LinkedIn・RSS にもアカウントの軸は無い。
+- 会社アカウントで Meet の会議記録を取る例: `bun run collect auth google --account work --sources gmail,calendar,meet`（同意画面に Meet のスコープが増える。Workspace 側で文字起こし / Gemini メモが有効で、会議で文字起こしをオンにしたものだけ発言が付く）。`collect-meet-<from>_<to>@work.json` を `ingest` が 207_work のプロジェクトのログにまとめる。
 - 追加アカウントの Gmail にも同じ Apps Script（`900_system/gas/emailfilter/`。`KB/*` と `KB/取込済`・`システム/要確認` のラベル）を入れる。collector はラベルを読むだけで、分類はしない。
 - 会社の Google Workspace は、管理者が未確認の OAuth クライアント（デスクトップ アプリ）を止めていることがある。同意画面が拒否するならこちらで設定できることは無い（管理者にクライアント ID の許可を頼む）。
 

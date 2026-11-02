@@ -20,7 +20,7 @@ export interface Credential {
 }
 
 const GOOGLE_SOURCES: Record<(typeof GOOGLE_TOKENS)[number]["name"], string[]> = {
-  google: ["gmail", "gmail-review", "calendar", "youtube"],
+  google: ["gmail", "gmail-review", "calendar", "youtube", "meet"],
   "google-health": ["health"],
 };
 

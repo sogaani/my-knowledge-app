@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import {
   loadConfig, openDb, indexNotes, loadSimilar, SchemaRegistry, createNote, DuplicateError, patchFrontmatter, appendToSection,
   ingestFile, ingestUrl, sourceExcerpt, markProcessed, listInbox, putInbox, parseFilters, runQuery, buildGold,
@@ -90,7 +90,8 @@ switch (cmd) {
     const { f, pos } = flags(argv);
     const [path, ...rest] = pos;
     if (!path || !rest.length) die('usage: kb append <path> "<line>" [--section ログ]');
-    appendToSection(join(cfg.root, path), String(f.section ?? "履歴"), rest.join(" "));
+    // a project's log.md keeps its entries under ログ; every other note has a 履歴 section
+    appendToSection(join(cfg.root, path), String(f.section ?? (basename(path) === "log.md" ? "ログ" : "履歴")), rest.join(" "));
     console.log(path);
     break;
   }

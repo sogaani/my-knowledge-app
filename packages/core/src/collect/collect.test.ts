@@ -657,3 +657,44 @@ describe("rss", () => {
     expect(JSON.parse(loadState(cfg).rss!.cursor!).v).toBe(1);
   });
 });
+
+describe("runCollectors with extra accounts", () => {
+  const mkCfg = () => {
+    const root = mkdtempSync(join(tmpdir(), "kb-collect-"));
+    return { root, inbox: join(root, "000_inbox"), cache: join(root, "900_system", "cache") } as unknown as KbConfig;
+  };
+  const now = new Date(2026, 10, 3, 6, 30);
+  const log = { info() {}, warn() {} };
+  // fakes that behave like the real sources: configured by the plain variable, report which token / account they ran with
+  const calendar: Collector = { id: "calendar", label: "cal", lookbackDays: 7, configured: (env) => (env.GOOGLE_REFRESH_TOKEN ? true : "missing GOOGLE_REFRESH_TOKEN"), collect: async ({ env, account }) => ({ items: [{ token: env.GOOGLE_REFRESH_TOKEN, account: account ?? null, ids: env.GOOGLE_CALENDAR_IDS ?? null }] }), digest: (x) => JSON.stringify(x) };
+  const gmail: Collector = { ...calendar, id: "gmail", collect: async ({ account }) => ({ files: [{ name: "mail-20261103-purchase-abc.json", json: { account: account ?? null } }] }) };
+  const github: Collector = { ...calendar, id: "github", configured: (env) => (env.GITHUB_TOKEN ? true : "missing GITHUB_TOKEN"), collect: async ({ env }) => ({ items: [{ token: env.GITHUB_TOKEN, login: env.GITHUB_LOGIN ?? null }] }) };
+  const env = { GOOGLE_REFRESH_TOKEN: "a", GOOGLE_CALENDAR_IDS: "mine", GOOGLE_REFRESH_TOKEN__work: "b", GOOGLE_SOURCES__work: "gmail,calendar", GITHUB_TOKEN__work: "t", GITHUB_LOGIN__work: "me-at-work" };
+
+  test("each account runs its own instances with its own env; files and state carry the account", async () => {
+    const cfg = mkCfg();
+    const reports = await runCollectors(cfg, env, { now, log, collectors: [gmail, github, calendar] });
+    expect(reports.map((r) => [r.id, r.status])).toEqual([["gmail", "ok"], ["gmail@work", "ok"], ["github", "skipped"], ["github@work", "ok"], ["calendar", "ok"], ["calendar@work", "ok"]]);
+    expect(readdirSync(cfg.inbox).sort()).toEqual([
+      "collect-calendar-2026-10-27_2026-11-03.json", "collect-calendar-2026-10-27_2026-11-03@work.json", "collect-github-2026-10-27_2026-11-03@work.json",
+      "mail-20261103-purchase-abc.json", "mail-20261103-purchase-abc@work.json",
+    ]);
+    const read = (n: string) => JSON.parse(readFileSync(join(cfg.inbox, n), "utf8"));
+    expect(read("collect-calendar-2026-10-27_2026-11-03.json")).toMatchObject({ source: "calendar", items: [{ token: "a", account: null, ids: "mine" }] });
+    expect(read("collect-calendar-2026-10-27_2026-11-03.json").account).toBeUndefined();
+    expect(read("collect-calendar-2026-10-27_2026-11-03@work.json")).toMatchObject({ source: "calendar", account: "work", items: [{ token: "b", account: "work", ids: null }] });
+    expect(read("collect-github-2026-10-27_2026-11-03@work.json")).toMatchObject({ source: "github", account: "work", items: [{ token: "t", login: "me-at-work" }] });
+    expect(Object.keys(loadState(cfg)).sort()).toEqual(["calendar", "calendar@work", "github@work", "gmail", "gmail@work"]);
+    // kb source renders the account in the header
+    expect(digestJson(readFileSync(join(cfg.inbox, "collect-calendar-2026-10-27_2026-11-03@work.json"), "utf8"))).toContain("（アカウント work）");
+  });
+
+  test("--only: a source name runs every account, an instance id just one", async () => {
+    const cfg = mkCfg();
+    const both = await runCollectors(cfg, env, { now, log, collectors: [gmail, github, calendar], only: ["calendar"] });
+    expect(both.map((r) => r.id)).toEqual(["calendar", "calendar@work"]);
+    const one = await runCollectors(mkCfg(), env, { now, log, collectors: [gmail, github, calendar], only: ["calendar@work"] });
+    expect(one.map((r) => r.id)).toEqual(["calendar@work"]);
+    await expect(runCollectors(mkCfg(), env, { now, log, collectors: [calendar], only: ["calendar@home"] })).rejects.toThrow("unknown source");
+  });
+});

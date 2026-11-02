@@ -34,13 +34,19 @@ export interface GoogleAuth {
   accessToken(): Promise<string>;
 }
 
-export function createGoogleAuth(env: Env, http: HttpClient, opts: { refreshTokenVar?: string; authCommand?: string } = {}): GoogleAuth {
+/**
+ * `account`: an extra account (accounts.ts). Its env already maps GOOGLE_REFRESH_TOKEN__<account> onto the plain name;
+ * the option only makes the messages name the real variable and the matching `auth google --account …` command.
+ */
+export function createGoogleAuth(env: Env, http: HttpClient, opts: { refreshTokenVar?: string; authCommand?: string; account?: string } = {}): GoogleAuth {
   const tokenVar = opts.refreshTokenVar ?? "GOOGLE_REFRESH_TOKEN";
-  const missing = ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", tokenVar].filter((k) => !env[k]);
+  const shownVar = opts.account ? `${tokenVar}__${opts.account}` : tokenVar;
+  const authCommand = opts.authCommand ?? (opts.account ? `auth google --account ${opts.account}` : "auth google");
+  const missing = ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", tokenVar].filter((k) => !env[k]).map((k) => (k === tokenVar ? shownVar : k));
   let cached: { token: string; exp: number } | null = null;
   let inflight: Promise<string> | null = null;
   return {
-    configured: missing.length ? `missing ${missing.join(", ")} (run: bun run collect ${opts.authCommand ?? "auth google"})` : true,
+    configured: missing.length ? `missing ${missing.join(", ")} (run: bun run collect ${authCommand})` : true,
     async accessToken() {
       if (missing.length) throw new Error(`Google auth not configured: missing ${missing.join(", ")}`);
       if (cached && cached.exp > Date.now() + 60_000) return cached.token;
@@ -59,7 +65,7 @@ export function createGoogleAuth(env: Env, http: HttpClient, opts: { refreshToke
           return r.access_token;
         } catch (e) {
           if (e instanceof HttpError && isExpiredTokenError(e.body)) {
-            throw new Error(`${tokenVar} expired or revoked (invalid_grant): run bun run collect ${opts.authCommand ?? "auth google"}`);
+            throw new Error(`${shownVar} expired or revoked (invalid_grant): run bun run collect ${authCommand}`);
           }
           throw e;
         } finally {

@@ -3,7 +3,8 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { join } from "node:path";
 import type { KbConfig } from "../config";
 import { DAY_MS as DAY, startOfDay, ymd } from "./dates";
-import { createGoogleAuth } from "./google";
+import { accountFileName, collectorInstances, splitId, type CollectorInstance } from "./accounts";
+import { createGoogleAuth, type GoogleAuth } from "./google";
 import { createHttp, type HttpClient } from "./http";
 import { COLLECTORS } from "./registry";
 import type { Collector, CollectResult, Env, Feed, Logger } from "./types";
@@ -50,7 +51,11 @@ function writeInbox(cfg: KbConfig, name: string, json: unknown, dryRun: boolean)
   return true;
 }
 
-export const feedName = (id: string, from: string, to: string) => `collect-${id}-${from}_${to}.json`;
+/** `calendar` → collect-calendar-<from>_<to>.json; `calendar@work` → collect-calendar-<from>_<to>@work.json. */
+export const feedName = (iid: string, from: string, to: string) => {
+  const { id, account } = splitId(iid);
+  return accountFileName(`collect-${id}-${from}_${to}.json`, account);
+};
 
 export interface RunOpts {
   only?: string[];
@@ -66,41 +71,50 @@ export interface RunOpts {
 export async function runCollectors(cfg: KbConfig, env: Env, opts: RunOpts = {}): Promise<SourceReport[]> {
   const log = opts.log ?? { info: (m) => console.log(m), warn: (m) => console.warn(m) };
   const http = opts.http ?? createHttp({ onRetry: (m) => log.warn(`  ${m}`) });
-  const google = createGoogleAuth(env, http);
+  // one Google auth per account (the default account's is shared by its Gmail / Calendar / YouTube instances)
+  const googleAuths = new Map<string | undefined, GoogleAuth>();
+  const googleFor = (inst: CollectorInstance) => {
+    let g = googleAuths.get(inst.account);
+    if (!g) googleAuths.set(inst.account, (g = createGoogleAuth(inst.env, http, inst.account ? { account: inst.account } : {})));
+    return g;
+  };
   const state = loadState(cfg);
   const now = opts.now ?? new Date();
-  const all = opts.collectors ?? COLLECTORS;
-  const unknown = (opts.only ?? []).filter((id) => !all.some((c) => c.id === id));
+  const all = collectorInstances(opts.collectors ?? COLLECTORS, env);
+  // `--only calendar` runs that source for every account; `calendar@work` just the one instance
+  const matches = (inst: CollectorInstance, name: string) => inst.id === name || inst.collector.id === name;
+  const unknown = (opts.only ?? []).filter((name) => !all.some((inst) => matches(inst, name)));
   if (unknown.length) throw new Error(`unknown source(s): ${unknown.join(", ")} (known: ${all.map((c) => c.id).join(", ")})`);
-  const selected = opts.only?.length ? all.filter((c) => opts.only!.includes(c.id)) : all;
+  const selected = opts.only?.length ? all.filter((inst) => opts.only!.some((name) => matches(inst, name))) : all;
 
-  const runOne = async (c: Collector): Promise<SourceReport> => {
-    const report: SourceReport = { id: c.id, status: "ok", written: [], skippedExisting: [] };
+  const runOne = async (inst: CollectorInstance): Promise<SourceReport> => {
+    const { id, account, collector: c, env } = inst;
+    const report: SourceReport = { id, status: "ok", written: [], skippedExisting: [] };
     const ok = c.configured(env);
     if (ok !== true) return { ...report, status: "skipped", reason: ok };
-    const st = state[c.id] ?? {};
+    const st = state[id] ?? {};
     const to = opts.to ?? now;
     const from = opts.from ?? (st.lastTo ? new Date(st.lastTo) : new Date(startOfDay(to).getTime() - c.lookbackDays * DAY));
     let res: CollectResult;
     try {
-      res = await c.collect({ cfg, env, from, to, cursor: st.cursor, http, google, log, dryRun: !!opts.dryRun });
+      res = await c.collect({ cfg, env, account, from, to, cursor: st.cursor, http, google: googleFor(inst), log, dryRun: !!opts.dryRun });
       const f = ymd(res.from ?? from), t = ymd(res.to ?? to);
       Object.assign(report, { from: f, to: t, items: res.count ?? res.items?.length ?? res.files?.length ?? 0 });
-      const files = [...(res.files ?? [])];
+      const files = (res.files ?? []).map((file) => ({ ...file, name: accountFileName(file.name, account) }));
       if (res.items?.length) {
-        const feed: Feed = { source: c.id, from: f, to: t, collected_at: now.toISOString(), count: res.items.length, ...(res.meta ? { meta: res.meta } : {}), items: res.items };
-        files.push({ name: feedName(c.id, f, t), json: feed });
+        const feed: Feed = { source: c.id, ...(account ? { account } : {}), from: f, to: t, collected_at: now.toISOString(), count: res.items.length, ...(res.meta ? { meta: res.meta } : {}), items: res.items };
+        files.push({ name: feedName(id, f, t), json: feed });
       }
       for (const file of files) (writeInbox(cfg, file.name, file.json, !!opts.dryRun) ? report.written : report.skippedExisting).push(file.name);
       if (!opts.dryRun) {
         await res.commit?.();
-        state[c.id] = { cursor: res.cursor ?? st.cursor, lastTo: (res.to ?? to).toISOString(), lastRunAt: now.toISOString(), lastItems: report.items };
+        state[id] = { cursor: res.cursor ?? st.cursor, lastTo: (res.to ?? to).toISOString(), lastRunAt: now.toISOString(), lastItems: report.items };
       }
       return report;
     } catch (e) {
       // keep the old cursor: the next run retries the same window
       const msg = String((e as Error)?.message ?? e);
-      if (!opts.dryRun) state[c.id] = { ...st, lastRunAt: now.toISOString(), lastError: msg.slice(0, 300) };
+      if (!opts.dryRun) state[id] = { ...st, lastRunAt: now.toISOString(), lastError: msg.slice(0, 300) };
       return { ...report, status: "failed", reason: msg };
     }
   };

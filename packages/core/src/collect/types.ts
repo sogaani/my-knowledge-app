@@ -18,7 +18,10 @@ export interface Logger {
 
 export interface CollectContext {
   cfg: KbConfig;
+  /** The account's view of the .env (accounts.ts): plain variable names, even for an extra account. */
   env: Env;
+  /** Extra account this instance runs against (`work`); undefined for the default account. */
+  account?: string;
   /** Window to collect: [from, to). `from` defaults to the source's cursor, else `to - lookbackDays`. */
   from: Date;
   to: Date;
@@ -70,6 +73,8 @@ export interface Collector {
 /** Envelope of collect-*.json files. Raw API objects stay untouched in `items`. */
 export interface Feed<T = unknown> {
   source: string;
+  /** Extra account the feed came from (the file name ends in `@<account>.json`); absent for the default account. */
+  account?: string;
   from: string; // YYYY-MM-DD
   to: string; // YYYY-MM-DD, exclusive
   collected_at: string;

@@ -26,6 +26,8 @@ export interface MailItem {
   gmail_thread: string;
   gmail_label: string;
   category: string;
+  /** Extra account the mailbox belongs to (the file name ends in `@<account>.json`); absent for the default account. */
+  account?: string;
   date: string; // ISO
   from: string;
   to: string;
@@ -77,7 +79,7 @@ export const gmail: Collector = {
   label: "Gmail",
   lookbackDays: 0, // label-driven, not time-driven
   configured: (env) => (env.GOOGLE_REFRESH_TOKEN ? (env.GMAIL === "off" ? "GMAIL=off" : true) : "missing GOOGLE_REFRESH_TOKEN (run: bun run collect auth google)"),
-  async collect({ http, google, log }) {
+  async collect({ http, google, log, account }) {
     const { labels } = await googleJson<{ labels: { id: string; name: string }[] }>(http, google, `${API}/labels`);
     const idOf = new Map(labels.map((l) => [l.name, l.id]));
     const fetchedId = idOf.get(FETCHED_LABEL);
@@ -103,7 +105,7 @@ export const gmail: Collector = {
     const minimal = await mapLimit(unique, 10, (t) => googleJson<{ labelIds?: string[] }>(http, google, `${API}/messages/${t.id}?format=minimal`));
     const pending = unique.filter((_, i) => !(minimal[i]!.labelIds ?? []).includes(fetchedId));
     const msgs = await mapLimit(pending, 5, (t) => googleJson<Message>(http, google, `${API}/messages/${t.id}?format=full`).then((m) => ({ m, label: t.label })));
-    const items = msgs.map(({ m, label }) => toMailItem(m, label));
+    const items: MailItem[] = msgs.map(({ m, label }) => ({ ...toMailItem(m, label), ...(account ? { account } : {}) }));
     const files: InboxFile[] = items.map((it) => ({ name: mailFileName(it), json: it }));
     return {
       files,

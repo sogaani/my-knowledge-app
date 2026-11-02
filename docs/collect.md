@@ -11,7 +11,8 @@ launchd daily-collect（毎朝 06:30）
             ├─ HTTP は http.ts（429・5xx・レート制限の 403（GitHub の X-RateLimit、Google の rateLimitExceeded / RATE_LIMIT_EXCEEDED）だけ再試行。Retry-After / X-RateLimit-Reset を尊重、
             │   それ以外は指数バックオフ + full jitter：基準 1 秒・上限 60 秒・最大 5 回）
             ├─ 000_inbox/collect-<source>-<from>_<to>.json（フィード）/ collect-rss-<slug>-<from>_<to>.json（RSS はフィードごと）/ mail-YYYYMMDD-<category>-<id>.json（Gmail）
-            └─ 900_system/cache/collect-state.json（ソースごとのカーソル。失敗したソースは前回の位置から再取得）
+            │   追加アカウント（下の「複数アカウント」）の分は拡張子の前に @<name>（collect-calendar-…@work.json / mail-…@work.json）
+            └─ 900_system/cache/collect-state.json（ソース（×アカウント）ごとのカーソル。失敗したソースは前回の位置から再取得）
 launchd daily-ingest（07:00）→ enqueue.sh → POST /api/jobs（ingest, scheduled）→ worker
   ├─ worker は claim した ingest と一緒に、その時点で queued の ingest を全部 claim して 1 束にする（下の「ingest ジョブの束ね実行」）
   ├─ inbox が空で束が定期実行だけなら agent を起動せず skip
@@ -101,9 +102,26 @@ Gmail は最多のソース（3 日で 185 件、うち purchase と finance が
 
 秘密は `.env`（gitignore 済み）と 1Password に置く。`.env` は `0600`（`bun run collect` が毎回、`launchd.sh` が `apps/worker/.env` ともども強制する。`collect auth` の書き込みも 0600）。ログには件数とエラーの種類だけを出す（件名・本文は出さない）。ローテーション手順の一覧は `deploy/README.md` §5。
 
+## 複数アカウント
+
+Google と GitHub は、既定のアカウントのほかに名前付きのアカウントを足せる（`packages/core/src/collect/accounts.ts`）。`.env` の同じ変数に `__<name>` を付ける（`name` は `[a-z0-9]+`）。
+
+| 変数 | 意味 |
+|---|---|
+| `GOOGLE_REFRESH_TOKEN__work` | そのアカウントのリフレッシュトークン。`bun run collect auth google --account work --sources gmail,calendar` がブラウザの同意（そのアカウントでログインする）から書き込む。OAuth クライアント（`GOOGLE_CLIENT_ID/SECRET`）は共用 |
+| `GOOGLE_SOURCES__work` | そのアカウントで動かすソース（`gmail` / `calendar` / `youtube` のカンマ区切り。`gmail` は週次の `gmail-review` も含む。`GMAIL_REVIEW__work=off` で止める）。未設定なら全部。`auth … --sources` が書く。同意で求めるスコープもこの範囲だけ |
+| `GOOGLE_CALENDAR_IDS__work` など | 既定アカウントの `GOOGLE_CALENDAR_IDS` / `GOOGLE_CALENDAR_HORIZON_DAYS` / `YOUTUBE_PLAYLIST_IDS` / `GMAIL` / `GMAIL_REVIEW` はそのアカウントには効かない（必要なら `__work` 付きで書く） |
+| `GITHUB_TOKEN__work` / `GITHUB_LOGIN__work` | 別アカウントでログインして作った fine-grained PAT（権限は `GITHUB_TOKEN` と同じ） |
+
+- 動き: ソースはアカウントごとに別のインスタンスになる。id は `calendar@work`、`collect-state.json` のカーソルも別、inbox のファイル名は拡張子の前に `@work`（`collect-calendar-<from>_<to>@work.json`、`mail-YYYYMMDD-<category>-<id>@work.json`）。フィードの JSON には `account: "work"`、Gmail の JSON にも `account` が入り、`kb source` の見出しに「（アカウント work）」と出る。`ingest` が振り分けに使う `collect-calendar-*` / `mail-*-<category>-*` の形はそのまま合う（`@work` は `-work-` ではないので `KB/作業` のカテゴリとも混ざらない）。
+- `bun run collect calendar` は全アカウントの calendar、`bun run collect calendar@work` はその 1 つだけ。`status`・運用ダイジェストの「収集:」行・認証失敗の通知（「Google work の認証に失敗しました（gmail@work）。bun run collect auth google --account work」）も `@work` 付きで出る。
+- Google Health は追加アカウントを持たない（月次 `health_log` が歩数などを合計するので二重計上になる）。LinkedIn・RSS にもアカウントの軸は無い。
+- 追加アカウントの Gmail にも同じ Apps Script（`900_system/gas/emailfilter/`。`KB/*` と `KB/取込済`・`システム/要確認` のラベル）を入れる。collector はラベルを読むだけで、分類はしない。
+- 会社の Google Workspace は、管理者が未確認の OAuth クライアント（デスクトップ アプリ）を止めていることがある。同意画面が拒否するならこちらで設定できることは無い（管理者にクライアント ID の許可を頼む）。
+
 ## 運用
 
-- `bun run collect [source...] [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--dry-run]`：手動実行。`--from` で取りこぼした期間を取り直せる。
+- `bun run collect [source...] [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--dry-run]`：手動実行。`--from` で取りこぼした期間を取り直せる。`source` は `calendar`（全アカウント）か `calendar@work`（1 つ）。
 - 同じ期間のファイルが inbox に残っている間は上書きしない（ingest 前の二重実行は無害）。Bronze 側も同じ内容なら同じ ID になる。
 - ログ：`my-knowledge/900_system/logs/collect.log`。失敗したソースは `bun run collect status` の `last error` に出る。
 
@@ -114,7 +132,7 @@ Gmail は最多のソース（3 日で 185 件、うち purchase と finance が
 - 失敗したソースだけが止まり（Google は `… expired or revoked (invalid_grant): run bun run collect auth …`、GitHub は `HTTP 401 … Bad credentials`）、他のソースは続行する。期間は前回の位置から取り直すので、取りこぼしは出ない（Gmail は未取得ラベル基準）。
 - 毎朝の実行（launchd）が、資格情報ごとに 1 通の macOS 通知を出す（「Gmail / Calendar / YouTube の認証に失敗しました（gmail, calendar）。bun run collect auth google」）。ログ `collect.log` にも `WARN` が出る。quota 超過やフィードの障害など認証以外の失敗は通知しない（ログと運用ダイジェストに出る）。
 - 07:00 の運用ダイジェストの「収集:」行は、認証で失敗したソースを `gmail 認証失敗` と出す（他の失敗は `失敗`）。`bun run collect status` の `last error` にも残る。
-- 直し方: Google は `bun run collect auth`（2 つとも）か `bun run collect auth google` / `auth google-health`（片方。同意し直すと新しいトークンが `.env` に書き込まれる）。GitHub は Settings → Developer settings → Fine-grained tokens → Regenerate token して `GITHUB_TOKEN` を書き換える。
+- 直し方: Google は `bun run collect auth`（2 つとも）か `bun run collect auth google` / `auth google-health`（片方。同意し直すと新しいトークンが `.env` に書き込まれる）。GitHub は Settings → Developer settings → Fine-grained tokens → Regenerate token して `GITHUB_TOKEN` を書き換える。追加アカウント（上の「複数アカウント」）は `auth google --account <name>` と `GITHUB_TOKEN__<name>`。
 
 Google の同意画面が「テスト」のままだと、リフレッシュトークンは同意から 7 日で失効する（使っていても延長されない）。`invalid_grant` が 7 日ごとに出るならそれが原因なので、Cloud Console → Google Auth Platform → Audience → **Publish app** で公開し、`bun run collect auth` で取り直す（`gmail.modify` は restricted scope なので「確認されていません」の警告が出るが、自分のアカウントなら「詳細 → 移動」で同意できる）。
 

@@ -15,7 +15,7 @@ export function digestJson(text: string): string | null {
     const m = o as MailItem;
     return [
       `from: ${m.from}`, `to: ${m.to}`, `date: ${m.date}`, `subject: ${m.subject}`, `gmail_id: ${m.gmail_id}`, `gmail_thread: ${m.gmail_thread}`,
-      `gmail_label: ${m.gmail_label}`, `category: ${m.category}`, `attachments: ${m.attachments.join(", ") || "(none)"}`,
+      `gmail_label: ${m.gmail_label}`, `category: ${m.category}`, ...(m.account ? [`account: ${m.account}`] : []), `attachments: ${m.attachments.join(", ") || "(none)"}`,
       "---", m.body + (m.body_truncated ? "\n…(truncated)" : ""),
     ].join("\n");
   }
@@ -23,7 +23,7 @@ export function digestJson(text: string): string | null {
     const c = COLLECTORS.find((x) => x.id === o.source);
     const line = (it: unknown) => { try { return c ? c.digest(it) : JSON.stringify(it).slice(0, 200); } catch { return JSON.stringify(it).slice(0, 200); } };
     return [
-      `# ${c?.label ?? o.source} ${o.from} 〜 ${o.to}（${o.count ?? o.items.length} 件）`,
+      `# ${c?.label ?? o.source}${o.account ? `（アカウント ${o.account}）` : ""} ${o.from} 〜 ${o.to}（${o.count ?? o.items.length} 件）`,
       ...(o.meta ? [`meta: ${JSON.stringify(o.meta)}`] : []),
       "",
       ...o.items.map((it) => `- ${line(it)}`),

@@ -94,7 +94,7 @@ Gmail は最多のソース（3 日で 185 件、うち purchase と finance が
 
 1. `cp apps/collector/.env.example apps/collector/.env` して `KB_ROOT` を書く。
 2. GitHub: fine-grained PAT（対象リポジトリに Metadata / Contents / Issues / Pull requests の Read。非公開の push・レビュー・star も拾うならユーザー権限 Events の Read も）を `GITHUB_TOKEN` に。
-3. Google: GCP で Gmail API・Google Calendar API・YouTube Data API v3・Google Health API を有効化し、OAuth クライアント（種類「デスクトップ アプリ」）を作って `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` に。同意画面は「本番環境」に公開する（「テスト」のままだとリフレッシュトークンが同意から 7 日で失効する。下の「認証エラー」）。
+3. Google: GCP で Gmail API・Google Calendar API・YouTube Data API v3・Google Health API（`meet` を使うなら Google Meet REST API も）を有効化し、OAuth クライアント（種類「デスクトップ アプリ」）を作って `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` に。同意画面は「本番環境」に公開する（「テスト」のままだとリフレッシュトークンが同意から 7 日で失効する。下の「認証エラー」）。
 4. RSS: 追いたいブログ・ニュースのフィード URL を `FEED_URLS` に並べる（無ければ `rss` は skip）。
 5. `bun run collect auth`：ブラウザで 2 回同意する（Gmail・Calendar・YouTube 用と、Health のスコープだけの Health 用）。`GOOGLE_REFRESH_TOKEN` / `GOOGLE_HEALTH_REFRESH_TOKEN` が `.env` に書き込まれる（トークンは画面に出ない）。
 6. `bun run collect status` で各ソースが `configured` になったか確認し、`bun run collect --dry-run` で件数だけ見る。

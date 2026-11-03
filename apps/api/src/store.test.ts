@@ -168,3 +168,35 @@ describe("listExchanges", () => {
     expect(s.listExchanges(1)[0]!.answer?.text).toBe("first");
   });
 });
+
+describe("captures", () => {
+  const add = (key: string, version: number, hash: string) => {
+    const job = s.createJob("ingest", { items: [] });
+    const id = s.newId();
+    s.addCapture({ id, key, version, hash, client: "chrome", platform: "gemini", title: "t", url: null, area: null, job_id: job.id, item_name: `capture-${id}.md` });
+    return { id, job };
+  };
+  test("settle from the worker's per-item outcomes", () => {
+    const a = add("gemini:1", 1, "h1");
+    s.settleCaptures(a.job.id, true, [{ name: `capture-${a.id}.md`, bronze: "20261103-note-aaaaaa", notes: ["200_silver/201_learning/x.md"], processed: true }]);
+    expect(s.getCaptureRow(a.id)).toMatchObject({ status: "done", bronze: "20261103-note-aaaaaa", notes: '["200_silver/201_learning/x.md"]' });
+    expect(s.lastCaptureNotes("gemini:1")).toEqual(["200_silver/201_learning/x.md"]);
+    const b = add("gemini:1", 2, "h2");
+    expect(s.latestCapture("gemini:1")?.id).toBe(b.id);
+    // in Bronze but not processed → stored; previous notes stay those of v1
+    s.settleCaptures(b.job.id, true, [{ name: `capture-${b.id}.md`, bronze: "20261103-note-bbbbbb", notes: [], processed: false }]);
+    expect(s.getCaptureRow(b.id)?.status).toBe("stored");
+    expect(s.lastCaptureNotes("gemini:1")).toEqual(["200_silver/201_learning/x.md"]);
+  });
+  test("a failed job, or an item left in the inbox, fails the capture", () => {
+    const a = add("claude:2", 1, "h");
+    s.settleCaptures(a.job.id, false, null, "boom");
+    expect(s.getCaptureRow(a.id)).toMatchObject({ status: "failed", error: "boom" });
+    const b = add("claude:3", 1, "h");
+    s.settleCaptures(b.job.id, true, []);
+    expect(s.getCaptureRow(b.id)?.status).toBe("failed");
+    // settled rows are not touched again
+    s.settleCaptures(b.job.id, true, [{ name: `capture-${b.id}.md`, bronze: "x", notes: [], processed: true }]);
+    expect(s.getCaptureRow(b.id)?.status).toBe("failed");
+  });
+});

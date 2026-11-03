@@ -33,6 +33,11 @@ spec:
             # Service-token JWTs carry the Client ID in common_name; take it from the operator's Secret.
             - name: WORKER_SERVICE_TOKEN_NAME
               valueFrom: { secretKeyRef: { name: {{ .Values.access.serviceTokenName }}, key: cloudflareClientId } }
+          {{- if .Values.access.captureTokenName }}
+            # optional: the operator writes this Secret once the kb-capture token exists; until then captures need a login
+            - name: CAPTURE_SERVICE_TOKEN_NAME
+              valueFrom: { secretKeyRef: { name: {{ .Values.access.captureTokenName }}, key: cloudflareClientId, optional: true } }
+          {{- end }}
           {{- end }}
           volumeMounts:
             - { name: data, mountPath: /data }

@@ -30,6 +30,8 @@ access:
   sessionDuration: 24h
   # CloudflareServiceToken for the Mac worker; the operator writes Secret <name> (cloudflareClientId / cloudflareSecretKey).
   serviceTokenName: kb-worker
+  # Service token for `kb capture` (the save-research skill on the Mac): allowed on /api/captures only. Empty = none.
+  captureTokenName: kb-capture
   # Keep the Cloudflare objects if the CRs are deleted (an Argo prune must not unprotect the app or rotate the token).
   preventDestroy: true
 # Created out of band (see deploy/README.md). The chart only references them.

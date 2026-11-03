@@ -6,14 +6,16 @@ import {
   runQuery, parseFilters, readNote, patchFrontmatter, createNote, DuplicateError, extractLinks, currentRecommendation, reactToSuggestion, REACTIONS,
   keywordSearch, monthlyByCurrency, errorHead, similarNotes, neighborNotes, noteHeads, resurface, LAYOUT, SILVER_PREFIX, GOLD_PREFIX, type SearchResponse, type SearchMode, type Reaction,
   listArticleDays, listLaterArticles, reactToArticle, ARTICLE_REACTIONS, type ArticleReaction,
+  parseCapture, captureKey, contentHash, captureFileName, renderCaptureFile, type ItemOutcome,
 } from "@kb/core";
 import { env } from "./env";
-import { authenticate, requireUser, requireWorker, requireUserOrWorker, type Principal } from "./auth";
+import { authenticate, requireUser, requireWorker, requireUserOrWorker, requireCapturer, type Principal } from "./auth";
 import { cfg, reg, db, sync, head, rebuildGold, commitKb, cachedLint, pushState, unsavedCount, isGitRepo } from "./kb";
 import {
   createJob, getJob, listJobs, claimNextJob, claimQueuedJobs, appendJobLog, touchJob, finishJob, requeueStale, pruneSearchJobs, waitJobEvent,
   addInboxItem, inboxItemNameExists, inboxItemsForJob, getInboxItem, markInboxFetched, addChat, listExchanges, newId, type JobKind, type ChatMessage,
   addPushSubscription, deletePushSubscription, listPushSubscriptions, recordView, lastViewed, viewCount,
+  addCapture, getCaptureRow, latestCapture, lastCaptureNotes, listCaptureRows, settleCaptures, type CaptureRow,
 } from "./store";
 import { askDonePush, pushEnabled, sendPushToAll, type PushPayload } from "./push";
 
@@ -316,6 +318,62 @@ api.post("/inbox", requireUser, async (c) => {
   return c.json({ job, items, skipped });
 });
 
+// ---- captures: AI research and shares from every client (Chrome extension, kb capture, share target), one status ----
+/** A capture as every client sees it: the job's live state until the worker settled it, then the notes it became. */
+function captureView(r: CaptureRow) {
+  let status: string = r.status, error = r.error;
+  if (r.status === "queued" || r.status === "running") {
+    const j = getJob(r.job_id);
+    if (!j) { status = "failed"; error = "job not found"; }
+    else if (j.status === "running") status = "running";
+    else if (j.status === "failed") { status = "failed"; error = errorHead(j.result) || "ingest failed"; }
+    // done but not yet settled (a worker that predates captures): the outcome is unknown, show it as stored
+    else if (j.status === "done") status = "stored";
+  }
+  const paths = (() => { try { return JSON.parse(r.notes) as string[]; } catch { return []; } })();
+  const heads = noteHeads(db, paths);
+  return {
+    id: r.id, key: r.key, version: r.version, hash: r.hash, client: r.client, platform: r.platform, title: r.title, url: r.url, area: r.area,
+    status, error, job_id: r.job_id, bronze: r.bronze,
+    notes: paths.map((p) => ({ path: p, title: heads.get(p)?.title ?? basename(p, ".md"), web: `/note/${p}` })),
+    created_at: r.created_at, updated_at: r.updated_at,
+  };
+}
+/**
+ * Accept a capture. The same key with the same content as its newest version → that version back with
+ * `duplicate: true` (nothing queued) unless it failed; otherwise the next version: an inbox item + an ingest job.
+ */
+api.post("/captures", requireCapturer, async (c) => {
+  let body: unknown;
+  try { body = await c.req.json(); } catch { return c.json({ error: "JSON body required" }, 400); }
+  const parsed = parseCapture(body);
+  if (!parsed.ok) return c.json({ error: parsed.error }, 400);
+  const input = parsed.value;
+  const key = captureKey(input), hash = contentHash(input);
+  const last = latestCapture(key);
+  if (last && last.hash === hash && captureView(last).status !== "failed") return c.json({ capture: captureView(last), duplicate: true });
+  const id = newId(), jobId = newId(), itemId = newId();
+  const version = (last?.version ?? 0) + 1;
+  const name = captureFileName(key, hash);
+  const text = renderCaptureFile(input, { capture_id: id, key, version, hash, previous_notes: lastCaptureNotes(key) });
+  addInboxItem({ id: itemId, job_id: jobId, kind: "text", name, path: null, url: null, text });
+  createJob("ingest", { items: [{ id: itemId, kind: "text", name }], capture: id }, jobId);
+  const row = addCapture({ id, key, version, hash, client: input.client, platform: input.platform, title: input.title, url: input.url ?? null, area: input.area ?? null, job_id: jobId, item_name: name });
+  console.log(`capture ${id.slice(0, 8)} ${input.client}/${input.platform} v${version} ${Buffer.byteLength(text)}B`);
+  return c.json({ capture: captureView(row), duplicate: false });
+});
+/** `?key=<key>`: the newest version of that conversation (the extension asks on page load); else the latest captures. */
+api.get("/captures", requireCapturer, (c) => {
+  const key = c.req.query("key");
+  if (key) { const r = latestCapture(key); return r ? c.json({ capture: captureView(r) }) : c.json({ capture: null }); }
+  const limit = Math.max(1, Math.min(100, Number(c.req.query("limit") ?? 30) || 30));
+  return c.json({ items: listCaptureRows(limit).map(captureView) });
+});
+api.get("/captures/:id", requireCapturer, (c) => {
+  const r = getCaptureRow(c.req.param("id") ?? "");
+  return r ? c.json({ capture: captureView(r) }) : c.json({ error: "not found" }, 404);
+});
+
 api.get("/jobs", requireUser, (c) => c.json(listJobs(Number(c.req.query("limit") ?? 50))));
 api.get("/jobs/:id", requireUser, (c) => { const j = getJob(c.req.param("id") ?? ""); return j ? c.json(j) : c.json({ error: "not found" }, 404); });
 /** Long-poll: answers with the job as soon as it is done/failed (woken by the worker's `done`), or unchanged after `wait` seconds. */
@@ -411,6 +469,7 @@ w.post("/jobs/:id/done", async (c) => {
   const b = (await c.req.json()) as { ok: boolean; result?: unknown; commit?: string | null; answer?: string; sources?: string[]; notify?: PushPayload };
   finishJob(id, b.ok, b.result ?? b.answer ?? null, b.commit);
   const job = getJob(id);
+  if (job?.kind === "ingest") settleCaptures(id, b.ok, itemsOf(b.result), errorHead(b.result) || undefined);
   const batch = batchOf(b.result);
   const lead = !batch || batch[0] === id;
   if (job?.kind === "ask") addChat("assistant", b.ok ? (b.answer ?? "") : `失敗: ${JSON.stringify(b.result)}`, id, b.sources ?? []);
@@ -431,6 +490,11 @@ w.post("/jobs/:id/done", async (c) => {
   }
   return c.json({ ok: true });
 });
+/** `result.items` of an ingest job: what each staged inbox item became (null from a worker that predates it). */
+function itemsOf(result: unknown): ItemOutcome[] | null {
+  const v = result && typeof result === "object" ? (result as { items?: unknown }).items : undefined;
+  return Array.isArray(v) ? (v as ItemOutcome[]) : null;
+}
 /** `result.batch` of a job the worker ran together with others (ids, lead first); null for a job run on its own. */
 function batchOf(result: unknown): string[] | null {
   const b = result && typeof result === "object" ? (result as { batch?: unknown }).batch : undefined;

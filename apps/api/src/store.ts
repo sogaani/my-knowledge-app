@@ -40,6 +40,13 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
 CREATE TABLE IF NOT EXISTS views (path TEXT NOT NULL, viewed_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS views_path ON views(path, viewed_at);
 CREATE INDEX IF NOT EXISTS chat_role_created ON chat_messages(role, created_at);
+CREATE TABLE IF NOT EXISTS captures (
+  id TEXT PRIMARY KEY, key TEXT NOT NULL, version INTEGER NOT NULL, hash TEXT NOT NULL, client TEXT NOT NULL, platform TEXT NOT NULL,
+  title TEXT NOT NULL, url TEXT, area TEXT, job_id TEXT NOT NULL, item_name TEXT NOT NULL,
+  status TEXT NOT NULL, bronze TEXT, notes TEXT NOT NULL DEFAULT '[]', error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS captures_key ON captures(key, version);
+CREATE INDEX IF NOT EXISTS captures_job ON captures(job_id);
 `);
 // added after the first release: older jobs.sqlite files lack the column
 if (!(store.query("PRAGMA table_info(jobs)").all() as { name: string }[]).some((c) => c.name === "heartbeat_at")) store.exec("ALTER TABLE jobs ADD COLUMN heartbeat_at TEXT");
@@ -189,4 +196,54 @@ export function listPushSubscriptions(): PushSubscriptionRow[] {
 }
 export function deletePushSubscription(endpoint: string) {
   store.run("DELETE FROM push_subscriptions WHERE endpoint=?", [endpoint]);
+}
+
+// ---- Captures (POST /api/captures): one row per version of a captured conversation; status settles from its ingest job ----
+/**
+ * queued / running: the ingest job's state. done: the worker reported the inbox item processed (to notes, or reviewed
+ * with nothing to reflect). stored: it reached Bronze but the ingest left it unprocessed. failed: the job failed or the
+ * item never left the inbox.
+ */
+export type CaptureStatus = "queued" | "running" | "done" | "stored" | "failed";
+export interface CaptureRow {
+  id: string; key: string; version: number; hash: string; client: string; platform: string; title: string; url: string | null; area: string | null;
+  job_id: string; item_name: string; status: CaptureStatus; bronze: string | null; notes: string; error: string | null; created_at: string; updated_at: string;
+}
+export function addCapture(r: Omit<CaptureRow, "status" | "bronze" | "notes" | "error" | "created_at" | "updated_at">): CaptureRow {
+  const t = now();
+  store.run("INSERT INTO captures(id,key,version,hash,client,platform,title,url,area,job_id,item_name,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+    [r.id, r.key, r.version, r.hash, r.client, r.platform, r.title, r.url, r.area, r.job_id, r.item_name, "queued", t, t]);
+  return getCaptureRow(r.id)!;
+}
+export function getCaptureRow(id: string): CaptureRow | null {
+  return store.query("SELECT * FROM captures WHERE id=?").get(id) as CaptureRow | null;
+}
+/** Newest version of a key. */
+export function latestCapture(key: string): CaptureRow | null {
+  return store.query("SELECT * FROM captures WHERE key=? ORDER BY version DESC LIMIT 1").get(key) as CaptureRow | null;
+}
+/** Notes the newest settled version of a key went to (what the next version should update). */
+export function lastCaptureNotes(key: string): string[] {
+  const r = store.query("SELECT notes FROM captures WHERE key=? AND status='done' ORDER BY version DESC LIMIT 1").get(key) as { notes: string } | null;
+  try { return r ? (JSON.parse(r.notes) as string[]) : []; } catch { return []; }
+}
+export function listCaptureRows(limit = 30): CaptureRow[] {
+  return store.query("SELECT * FROM captures ORDER BY created_at DESC LIMIT ?").all(limit) as CaptureRow[];
+}
+/**
+ * The worker's `done` for an ingest job: settle each capture staged in it from the per-item outcomes it reported.
+ * A job that failed, or an item the outcome list does not mention, settles as failed / stored accordingly.
+ */
+export function settleCaptures(jobId: string, ok: boolean, items: { name: string; bronze: string | null; notes: string[]; processed: boolean }[] | null, error?: string) {
+  const byName = new Map((items ?? []).map((i) => [i.name, i]));
+  for (const r of store.query("SELECT * FROM captures WHERE job_id=? AND status IN ('queued','running')").all(jobId) as CaptureRow[]) {
+    const it = byName.get(r.item_name);
+    let status: CaptureStatus, err: string | null = null;
+    if (it?.processed) status = "done";
+    else if (it?.bronze) status = "stored";
+    else if (!ok) { status = "failed"; err = error ?? "ingest failed"; }
+    else if (items) { status = "failed"; err = "ingest が inbox から取り込まなかった"; }
+    else status = "stored"; // an older worker that reports no items: the job ran, the outcome is unknown
+    store.run("UPDATE captures SET status=?, bronze=?, notes=?, error=?, updated_at=? WHERE id=?", [status, it?.bronze ?? null, JSON.stringify(it?.notes ?? []), err, now(), r.id]);
+  }
 }

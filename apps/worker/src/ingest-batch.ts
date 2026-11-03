@@ -65,12 +65,15 @@ export function ingestCommitMessage(plan: IngestPlan): string {
  * One `done` body per job. All jobs share the outcome; `batch` (when more than one) tells the API and the Jobs page
  * which jobs ran together, and only the lead job carries `notify` so the digest is pushed once.
  */
-export function ingestDoneBodies(plan: IngestPlan, outcome: IngestOutcome): Map<string, Record<string, unknown>> {
+export function ingestDoneBodies(plan: IngestPlan, outcome: IngestOutcome, itemsByJob?: Map<string, unknown[]>): Map<string, Record<string, unknown>> {
   const out = new Map<string, Record<string, unknown>>();
   const batch = plan.ids.length > 1 ? plan.ids : undefined;
   for (const [i, id] of plan.ids.entries()) {
     const result: Record<string, unknown> = outcome.skipped ? { summary: SKIP_SUMMARY, skipped: true } : { summary: outcome.summary ?? "" };
     if (batch) result.batch = batch;
+    // what each inbox item of this job became (Bronze id, notes): the API settles captures from it
+    const items = itemsByJob?.get(id);
+    if (items?.length) result.items = items;
     if (outcome.digest) result.digest = outcome.digest.text;
     const body: Record<string, unknown> = { ok: outcome.ok, result, commit: outcome.commit ?? null };
     if (i === 0 && outcome.digest) body.notify = outcome.digest.notify;

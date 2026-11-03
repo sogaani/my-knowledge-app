@@ -7,6 +7,7 @@ import {
   validateAll, archiveNote, lint, backupBronze, pruneBronze, logAccess, importPortfolio, importHealth, importLocation, importCalendar, importKoboLibrary, importStoryGraphLibrary, isStoryGraphCsv, readMeta, bronzeDir, decodeText, importMail, formatMailImport, runCollectors, type BronzeKind,
   search, VectorStore, embedNotes, makeEmbedder, setupLindera, linderaStatus, resolveTokenizer, readVectorMeta, type SearchMode,
   LAYOUT, curateArticles, buildHistory, listArticleDays, listLaterArticles, articleStats, collectTasks, dueLabel, today,
+  parseCapture, captureKey, contentHash, captureFileName, renderCaptureFile,
 } from "@kb/core";
 
 const argv = process.argv.slice(2);
@@ -20,7 +21,7 @@ function flags(args: string[]) {
     if (a.startsWith("--")) {
       const [k, v] = a.slice(2).split("=");
       if (v !== undefined) f[k] = v;
-      else if (args[i + 1] !== undefined && !args[i + 1].startsWith("--") && ["set", "dest", "kind", "text", "status", "superseded-by", "older-than", "type", "limit", "order", "chars", "title", "folder", "section", "fields", "mode", "account", "max-lookups", "date", "file", "area"].includes(k)) f[k] = args[++i];
+      else if (args[i + 1] !== undefined && !args[i + 1].startsWith("--") && ["set", "dest", "kind", "text", "status", "superseded-by", "older-than", "type", "limit", "order", "chars", "title", "folder", "section", "fields", "mode", "account", "max-lookups", "date", "file", "area", "platform", "url", "id", "note", "client", "wait", "account"].includes(k)) f[k] = args[++i];
       else f[k] = true;
     } else pos.push(a);
   }
@@ -108,6 +109,41 @@ switch (cmd) {
       break;
     }
     for (const p of listInbox(cfg)) console.log(p);
+    break;
+  }
+  case "capture": {
+    // AI research / anything worth keeping → POST /api/captures (the same API as the Chrome extension and the share
+    // target), then the shared status. kb capture [--title t] [--platform claude-code] [--url u] [--id conv] [--area work|personal]
+    //   [--note n] [--file p | stdin] [--wait 600] [--json]  ·  kb capture status <id> [--wait s] [--json]
+    const { f, pos } = flags(argv);
+    const conf = captureConf();
+    const show = (c: CaptureView) => (f.json ? json(c) : console.log(`${c.id}\t${c.status}${c.version > 1 ? `\tv${c.version}` : ""}${c.notes.length ? `\t${c.notes.map((n) => n.path).join(", ")}` : ""}${c.error ? `\t${c.error}` : ""}`));
+    if (pos[0] === "status") {
+      if (!pos[1]) die("usage: kb capture status <id> [--wait <seconds>] [--json]");
+      if (!conf) die("kb capture status: no API credentials (see `kb capture --help`)");
+      show(await waitCapture(conf!, pos[1]!, Number(f.wait ?? 0)));
+      break;
+    }
+    if (f.help) { console.log(captureHelp()); break; }
+    const markdown = f.file ? readFileSync(String(f.file), "utf8") : process.stdin.isTTY ? "" : await Bun.stdin.text();
+    const parsed = parseCapture({
+      client: f.client ?? "claude-code", platform: f.platform ?? "claude-code", title: f.title, url: f.url, conversation_id: f.id,
+      area: f.area, note: f.note, account: f.account, markdown, captured_at: new Date().toISOString(),
+    });
+    if (!parsed.ok) die(`kb capture: ${parsed.error}`);
+    const input = parsed.ok ? parsed.value : (undefined as never);
+    if (!conf) {
+      // no API credentials on this machine: drop it into the local inbox; the next ingest picks it up (no shared status)
+      const key = captureKey(input), hash = contentHash(input), name = captureFileName(key, hash);
+      putInbox(cfg, name, renderCaptureFile(input, { capture_id: `local-${hash.slice(0, 8)}`, key, version: 1, hash, previous_notes: [] }), { force: true });
+      console.error("kb capture: API credentials not set — put into the local inbox instead (status is not tracked)");
+      f.json ? json({ local: join(cfg.inbox, name) }) : console.log(join(cfg.inbox, name));
+      break;
+    }
+    const res = await captureFetch(conf, "/api/captures", { method: "POST", body: JSON.stringify(input) });
+    const { capture, duplicate } = res as { capture: CaptureView; duplicate: boolean };
+    if (duplicate) console.error("kb capture: same content as the last version — nothing new queued");
+    show(f.wait ? await waitCapture(conf, capture.id, Number(f.wait)) : capture);
     break;
   }
   case "ingest": {
@@ -429,6 +465,7 @@ switch (cmd) {
   portfolio import <csv|bronze-id> [--account 楽天証券]   update the portfolio note from a 楽天証券 asset CSV (CP932 ok)
   book import <bronze-id> [--status want|read]   楽天Kobo library export CSV → new book notes (imported: true, purchased_at; existing titles skipped); StoryGraph export CSV → status / started_at / finished_at / rating / review upserted by ISBN or title (a read book never goes back to want)
   mail import <bronze-id>... | --all [--dry-run] [--json]   Gmail items: routine notices (900_system/mail-rules.json) → processed -; money mails → ledger candidates (amount / date / merchant) matched against the ledger
+  capture [--title t] [--platform claude-code] [--url u] [--id conv] [--area work|personal] [--note n] [--file p] [--wait s] [--json]   send research (stdin / --file) to POST /api/captures; kb capture status <id> [--wait s]; --help for credentials
   tasks [--area work|personal] [--all] [--json]   open tasks (tasks.md checkboxes) of the live projects, due dates first (write a due as （期限 YYYY-MM-DD） in the line)
   query [type=book rating>=4] [--text "..."] [--include-archive] [--json] [--limit n] [--order -updated]
   search "<query>" [type=book ...] [--mode hybrid|vector|keyword] [--limit 10] [--include-archive] [--spoilers] [--json]
@@ -445,4 +482,39 @@ function pickFields(fm: Record<string, unknown>, fields?: string) {
   const out: Record<string, unknown> = {};
   for (const k of fields.split(",")) out[k] = fm[k];
   return out;
+}
+
+// ---- kb capture: client of POST /api/captures ----
+interface CaptureView { id: string; status: string; version: number; error: string | null; notes: { path: string; title: string; web: string }[]; [k: string]: unknown }
+interface CaptureConf { url: string; clientId: string; clientSecret: string }
+function captureHelp() { return `kb capture: send research to the KB API (same API as the Chrome extension and the phone share).
+  credentials: env KB_API_URL / KB_CAPTURE_CLIENT_ID / KB_CAPTURE_CLIENT_SECRET, or 900_system/config.local.toml
+    [capture]
+    api_url = "https://kb.wanawata.com"
+    client_id = "<kb-capture service token Client ID>"
+    client_secret = "<… Client Secret>"
+  without them the capture goes into the local 000_inbox (no shared status).`; }
+function captureConf(): CaptureConf | null {
+  const l = (cfg.local.capture ?? {}) as { api_url?: string; client_id?: string; client_secret?: string };
+  const url = process.env.KB_API_URL ?? l.api_url, clientId = process.env.KB_CAPTURE_CLIENT_ID ?? l.client_id, clientSecret = process.env.KB_CAPTURE_CLIENT_SECRET ?? l.client_secret;
+  return url && clientId && clientSecret ? { url: url.replace(/\/$/, ""), clientId, clientSecret } : null;
+}
+async function captureFetch(conf: CaptureConf, path: string, init: RequestInit = {}): Promise<unknown> {
+  const res = await fetch(`${conf.url}${path}`, {
+    ...init, redirect: "manual",
+    headers: { "content-type": "application/json", "CF-Access-Client-Id": conf.clientId, "CF-Access-Client-Secret": conf.clientSecret },
+  });
+  const text = await res.text();
+  if (res.status >= 300 && res.status < 400) die(`kb capture: ${res.status} redirect (Access rejected the service token?)`);
+  if (!res.ok) die(`kb capture: ${res.status} ${text.slice(0, 300)}`);
+  return JSON.parse(text);
+}
+/** Poll until the capture settles (done / stored / failed) or `seconds` pass; 0 = ask once. */
+async function waitCapture(conf: CaptureConf, id: string, seconds: number): Promise<CaptureView> {
+  const until = Date.now() + seconds * 1000;
+  for (;;) {
+    const { capture } = (await captureFetch(conf, `/api/captures/${encodeURIComponent(id)}`)) as { capture: CaptureView };
+    if (!["queued", "running"].includes(capture.status) || Date.now() >= until) return capture;
+    await Bun.sleep(5000);
+  }
 }

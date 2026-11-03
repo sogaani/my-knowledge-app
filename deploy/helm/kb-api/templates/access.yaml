@@ -10,6 +10,19 @@ metadata:
     cloudflare.zelic.io/prevent-destroy: {{ $a.preventDestroy | quote }}
 spec:
   name: {{ $a.serviceTokenName }}
+{{- if $a.captureTokenName }}
+---
+# kb capture on the Mac (the save-research skill): /api/captures only (the API checks the token's common_name).
+apiVersion: cloudflare.zelic.io/v1alpha1
+kind: CloudflareServiceToken
+metadata:
+  name: {{ $a.captureTokenName }}
+  labels: {{- include "kb-api.labels" . | nindent 4 }}
+  annotations:
+    cloudflare.zelic.io/prevent-destroy: {{ $a.preventDestroy | quote }}
+spec:
+  name: {{ $a.captureTokenName }}
+{{- end }}
 ---
 apiVersion: cloudflare.zelic.io/v1alpha1
 kind: CloudflareAccessApplication
@@ -39,4 +52,12 @@ spec:
       include:
         - serviceToken:
             - valueFrom: { name: {{ $a.serviceTokenName }}, namespace: {{ .Release.Namespace }} }
+    {{- if $a.captureTokenName }}
+    # kb capture (Mac): service token only; the API limits it to /api/captures.
+    - name: capture
+      decision: non_identity
+      include:
+        - serviceToken:
+            - valueFrom: { name: {{ $a.captureTokenName }}, namespace: {{ .Release.Namespace }} }
+    {{- end }}
 {{- end }}

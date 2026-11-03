@@ -7,7 +7,7 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import {
   LAYOUT, SILVER_PREFIX, SIMILAR_REL, ARTICLES_DIR, loadConfig, git, gitCommitPush, gitPull, gitStatusPaths, openDb, indexNotes, parseFilters, search, makeEmbedder, listInbox,
-  clipError, errorHead, buildOpsDigest, formatOpsDigest, renderOpsDigest, type SearchMode,
+  clipError, errorHead, buildOpsDigest, formatOpsDigest, renderOpsDigest, itemOutcomes, type ItemOutcome, type SearchMode,
 } from "@kb/core";
 import { planIngest, ingestCommitMessage, ingestDoneBodies, ingestFailureBodies, type IngestOutcome } from "./ingest-batch";
 
@@ -141,6 +141,7 @@ async function runIngest(jobs: Job[]) {
   const tag = `[job ${short(lead.id)}${jobs.length > 1 ? ` +${jobs.length - 1}` : ""}]`;
   let bodies: Map<string, Record<string, unknown>>;
   let outcome: IngestOutcome | undefined;
+  let itemsByJob: Map<string, ItemOutcome[]> | undefined;
   try {
     await pullLatest().catch((e) => log(lead.id, `pull: ${e.message}\n`));
     for (const j of jobs) await stageInbox(j);
@@ -159,6 +160,12 @@ async function runIngest(jobs: Job[]) {
       const commit = await commitAll(ingestCommitMessage(plan));
       outcome = { ok: code === 0, summary: tail(out), commit };
       if (plan.scheduled) outcome.agentOutput = out;
+      try {
+        const all = new Map(itemOutcomes(cfg, plan.inputs).map((o) => [o.name, o]));
+        itemsByJob = new Map(jobs.map((j) => [j.id, (j.inbox ?? []).map((i) => all.get(i.name)!).filter(Boolean)]));
+      } catch (e) {
+        warn(`${tag} item outcomes: ${(e as Error).message}`);
+      }
     }
     // One digest per scheduled morning run, whatever the batch size: what was waiting before the agent ate it.
     if (plan.scheduled) {
@@ -171,7 +178,7 @@ async function runIngest(jobs: Job[]) {
         warn(`${tag} digest: ${(e as Error).message}`);
       }
     }
-    bodies = ingestDoneBodies(plan, outcome);
+    bodies = ingestDoneBodies(plan, outcome, itemsByJob);
   } catch (e) {
     bodies = ingestFailureBodies(jobs.map((j) => j.id), (e as Error).message);
   }

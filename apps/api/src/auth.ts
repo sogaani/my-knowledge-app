@@ -4,7 +4,9 @@ import { env } from "./env";
 
 export type Principal =
   | { kind: "user"; email: string }
-  | { kind: "worker"; name: string };
+  | { kind: "worker"; name: string }
+  /** `kb capture` on the Mac (the save-research skill): its own Access service token, allowed on /api/captures only. */
+  | { kind: "capture"; name: string };
 
 const jwks = env.cfTeamDomain ? createRemoteJWKSet(new URL(`https://${env.cfTeamDomain}/cdn-cgi/access/certs`)) : null;
 
@@ -15,6 +17,7 @@ async function verifyAccess(token: string): Promise<Principal | null> {
   if (email && env.allowedEmails.includes(email)) return { kind: "user", email };
   const cn = typeof payload.common_name === "string" ? payload.common_name : null;
   if (cn && env.workerServiceTokenName && cn === env.workerServiceTokenName) return { kind: "worker", name: cn };
+  if (cn && env.captureServiceTokenName && cn === env.captureServiceTokenName) return { kind: "capture", name: cn };
   return null;
 }
 
@@ -35,6 +38,7 @@ export async function authenticate(c: Context, next: Next) {
     if (p?.kind === "worker" && env.workerToken && bearer !== env.workerToken) p = null;
   }
   if (!p) return c.json({ error: "unauthorized" }, 401);
+  if (p.kind === "capture" && !/^\/api\/captures(\/|$)/.test(c.req.path)) return c.json({ error: "capture token: /api/captures only" }, 403);
   c.set("principal", p);
   await next();
 }
@@ -53,5 +57,11 @@ export async function requireUser(c: Context, next: Next): Promise<Response | vo
 export async function requireUserOrWorker(c: Context, next: Next): Promise<Response | void> {
   const p = c.get("principal") as Principal;
   if (p.kind !== "user" && p.kind !== "worker") return c.json({ error: "user or worker only" }, 403);
+  await next();
+}
+/** /api/captures: the owner (browser: extension, share target) or the capture service token (`kb capture`). */
+export async function requireCapturer(c: Context, next: Next): Promise<Response | void> {
+  const p = c.get("principal") as Principal;
+  if (p.kind !== "user" && p.kind !== "capture") return c.json({ error: "user or capture token only" }, 403);
   await next();
 }

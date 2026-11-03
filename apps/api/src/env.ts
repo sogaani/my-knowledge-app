@@ -8,6 +8,7 @@ export const env = {
   cfAud: process.env.CF_ACCESS_AUD ?? "",
   allowedEmails: (process.env.ALLOWED_EMAILS ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean),
   workerServiceTokenName: process.env.WORKER_SERVICE_TOKEN_NAME ?? "", // Client ID of the Access service token (JWT common_name)
+  captureServiceTokenName: process.env.CAPTURE_SERVICE_TOKEN_NAME ?? "", // Client ID of the `kb-capture` service token (kb capture / save-research)
   workerToken: process.env.WORKER_TOKEN ?? "", // optional shared secret as a second factor / dev
   devBypassAuth: process.env.DEV_BYPASS_AUTH === "1",
   // Web Push (VAPID). Generate once with `bunx web-push generate-vapid-keys`; empty = push disabled (routes answer publicKey: null).

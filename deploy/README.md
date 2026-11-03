@@ -36,7 +36,9 @@ The cluster's [cloudflare-zero-trust-operator](https://github.com/BojanZelic/clo
 - `CloudflareAccessApplication` `my-knowledge` on `kb.wanawata.com` with two policies (created in this order; a failure stops at that policy, so `owner` is always protected first):
   - `owner` (allow): `access.allowedEmails` (only `soga.ani@gmail.com`). The same list becomes the API's `ALLOWED_EMAILS`.
   - `worker` (Service Auth / `non_identity`): the `kb-worker` service token, no login.
+  - `capture` (Service Auth / `non_identity`): the `kb-capture` service token (`kb capture` / the `save-research` skill on the Mac).
 - `CloudflareServiceToken` `kb-worker` → Secret `kb-worker` (`cloudflareClientId`, `cloudflareSecretKey`). The pod reads the Client ID from it as `WORKER_SERVICE_TOKEN_NAME`.
+- `CloudflareServiceToken` `kb-capture` (`access.captureTokenName`; empty = none) → Secret `kb-capture`. The pod reads its Client ID as `CAPTURE_SERVICE_TOKEN_NAME` (optional: until the Secret exists, only the browser login can capture).
 
 Both carry `cloudflare.zelic.io/prevent-destroy: "true"`, so deleting the Argo app leaves them in Cloudflare.
 
@@ -63,7 +65,18 @@ kubectl -n my-knowledge rollout restart deploy/kb-api
 2. Cloudflare Access matches the `worker` policy and forwards the request with a signed `Cf-Access-Jwt-Assertion` whose `common_name` is the token's Client ID.
 3. The API (`apps/api/src/auth.ts`) verifies the JWT against the team's JWKS (issuer + `CF_ACCESS_AUD`), checks `common_name` == `WORKER_SERVICE_TOKEN_NAME`, then requires the matching `WORKER_TOKEN`. Worker routes reject users with 403. The worker may also `POST /api/jobs` (that is how the launchd schedules in the data repo enqueue `ingest` / `skill` runs via `900_system/scripts/enqueue.sh`).
 
-`POST /api/inbox` is the owner's (web UI) only; the API knows no other principal than `user` and `worker`.
+`POST /api/inbox` is the owner's (web UI) only.
+
+### Captures (`/api/captures`)
+AI research and shares from every client go to one route (`docs/capture.md`): the Chrome extension and the phone share target send the owner's browser login (the `CF_Authorization` cookie, so Access forwards a user JWT); `kb capture` on the Mac sends the `kb-capture` service token. The API maps that token's `common_name` to a `capture` principal and rejects it everywhere but `/api/captures` (403). Mac setup, after the operator created the token:
+```
+# writes the two values straight into the gitignored config.local.toml (never echo them)
+{ echo; echo '[capture]'; echo 'api_url = "https://kb.wanawata.com"'
+  echo "client_id = \"$(kubectl -n my-knowledge get secret kb-capture -o jsonpath='{.data.cloudflareClientId}' | base64 -d)\""
+  echo "client_secret = \"$(kubectl -n my-knowledge get secret kb-capture -o jsonpath='{.data.cloudflareSecretKey}' | base64 -d)\""; } >> ~/git/my-knowledge/900_system/config.local.toml
+chmod 600 ~/git/my-knowledge/900_system/config.local.toml
+KB_ROOT=~/git/my-knowledge kb capture --title test --area personal <<< "疎通確認"   # → <id> queued
+```
 
 ## 3. Argo CD
 1. Edit `deploy/helm/kb-api/values.yaml` if needed (`persistence.storageClass`). Commit and push.
@@ -124,6 +137,7 @@ Nothing here is committed. Each secret lives in exactly one runtime place plus 1
 | Google OAuth client (`GOOGLE_CLIENT_ID/SECRET`) | `apps/collector/.env` | — | Cloud Console → Credentials → reset secret; then `bun run collect auth` (both tokens are bound to the client) |
 | `WORKER_TOKEN` | Secret `kb-api` and `apps/worker/.env` | — | `kubectl -n my-knowledge patch secret kb-api --type merge -p '{"stringData":{"WORKER_TOKEN":"'"$(openssl rand -hex 32)"'"}}'`, `rollout restart deploy/kb-api`, write the same value in the worker `.env`, `launchctl kickstart -k gui/$(id -u)/com.my-knowledge.worker` |
 | Access service token `kb-worker` (`CF_ACCESS_CLIENT_ID/SECRET`) | Cloudflare (operator CR) → Secret `kb-worker`; copy in `apps/worker/.env` | Cloudflare default 1 year (dashboard → Access → Service Auth shows the date) | Dashboard: Service Auth → `kb-worker` → Refresh (keeps the Client ID, so the pod needs no change); copy the new Client Secret into the worker `.env` and kickstart the worker. If the Client ID changed instead (token recreated), `rollout restart deploy/kb-api` as well |
+| Access service token `kb-capture` (`[capture] client_id/client_secret`) | Cloudflare (operator CR) → Secret `kb-capture`; copy in the data repo's `900_system/config.local.toml` (gitignored) | Cloudflare default 1 year | Dashboard: Service Auth → `kb-capture` → Refresh; rewrite `client_secret` (§2 Captures). A new Client ID needs `rollout restart deploy/kb-api` |
 | VAPID key pair | Secret `kb-api` | — | `bunx web-push generate-vapid-keys`, patch the Secret (§1), rollout restart; every browser must re-enable notifications |
 | git-crypt key | Secret `kb-git-crypt`, 1Password, each Mac clone | — | git-crypt cannot rekey history: only if leaked — re-encrypt the data repo with a new key (`git-crypt` has no built-in rotation; rewrite history or accept exposure of past commits), replace the Secret, restart the pod, re-unlock the Mac clone |
 | Deploy key (`kb-git`) | Secret `kb-git`, GitHub → data repo → Deploy keys | — | `ssh-keygen -t ed25519`, add the new public key (write access) to the repo, replace the Secret, rollout restart, delete the old key on GitHub |

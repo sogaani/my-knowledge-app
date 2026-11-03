@@ -9,6 +9,7 @@ import Home from "./pages/Home";
 import Notes from "./pages/Notes";
 import Note from "./pages/Note";
 import Inbox from "./pages/Inbox";
+import Capture from "./pages/Capture";
 import Chat from "./pages/Chat";
 import Suggestions from "./pages/Suggestions";
 import Articles from "./pages/Articles";
@@ -43,6 +44,7 @@ export default function App() {
         <HeaderSearch />
         <Item to="/" end>ホーム</Item>
         <Item to="/inbox">投げ込み</Item>
+        <Item to="/capture">AI の調査</Item>
         <Item to="/chat">チャット</Item>
         <Item to="/suggestions">おすすめ</Item>
         <Item to="/articles">記事</Item>
@@ -60,6 +62,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/inbox" element={<Inbox />} />
+          <Route path="/capture" element={<Capture />} />
           <Route path="/chat" element={<Chat />} />
           <Route path="/suggestions" element={<Suggestions />} />
           <Route path="/articles" element={<Articles />} />

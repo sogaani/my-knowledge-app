@@ -27,6 +27,12 @@ export interface ArticleDay { date: string; curated_at: string; feeds: string[];
  * saved = sent to the inbox for ingest; dismissed = not interested; done = read, no note (only from later).
  */
 export type ArticleReaction = "opened" | "later" | "saved" | "dismissed" | "done";
+/** A capture (AI research / share) and its shared status, as every client sees it (GET /api/captures). */
+export interface Capture {
+  id: string; key: string; version: number; client: string; platform: string; title: string; url: string | null; area: string | null;
+  status: "queued" | "running" | "done" | "stored" | "failed"; error: string | null; job_id: string; bronze: string | null;
+  notes: { path: string; title: string; web: string }[]; created_at: string; updated_at: string;
+}
 export interface Job { id: string; kind: string; status: "queued" | "running" | "done" | "failed"; payload: string; result: string | null; log: string; commit: string | null; created_at: string; started_at: string | null; finished_at: string | null }
 /** `sources`: JSON array of note paths (the ask skill's 根拠); `sourceNotes`: the same resolved to titles by the API. */
 export interface ChatMessage { id: string; role: "user" | "assistant"; text: string; sources: string; sourceNotes?: NoteHead[]; job_id: string | null; created_at: string }
@@ -72,6 +78,8 @@ export const api = {
   articleReact: (body: { date: string; id: string; reaction: ArticleReaction }) => req<{ ok: boolean; item: ArticleItem; job: Job | null }>("/articles/react", { method: "POST", body: JSON.stringify(body) }),
   inboxJson: (body: { url?: string; text?: string; title?: string }) => req<{ job: Job }>("/inbox", { method: "POST", body: JSON.stringify(body) }),
   inboxForm: async (form: FormData) => { const r = await fetch("/api/inbox", { method: "POST", body: form }); if (!r.ok) throw new Error(await r.text()); return r.json() as Promise<{ job: Job }>; },
+  capture: (body: Record<string, unknown>) => req<{ capture: Capture; duplicate: boolean }>("/captures", { method: "POST", body: JSON.stringify(body) }),
+  captures: () => req<{ items: Capture[] }>("/captures"),
   jobs: () => req<Job[]>("/jobs"),
   job: (id: string) => req<Job>(`/jobs/${id}`),
   /** Long-poll: resolves when the job is done/failed, or after `wait` seconds (≤ 50) with it still running. */

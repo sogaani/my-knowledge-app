@@ -85,3 +85,13 @@ describe("ingestFailureBodies", () => {
     expect(ingestFailureBodies(["a"], "x").get("a")).toEqual({ ok: false, result: { error: "x" } });
   });
 });
+
+describe("ingestDoneBodies items", () => {
+  test("each job carries only its own item outcomes", () => {
+    const plan = planIngest([{ id: "a", scheduled: false, inbox: [{ name: "x.md" }] }, { id: "b", scheduled: false, inbox: [] }], ["x.md"]);
+    const items = new Map([["a", [{ name: "x.md", bronze: "id", notes: [], processed: true }]], ["b", []]]);
+    const bodies = ingestDoneBodies(plan, { ok: true, summary: "", commit: null }, items);
+    expect((bodies.get("a")!.result as { items?: unknown[] }).items).toHaveLength(1);
+    expect((bodies.get("b")!.result as { items?: unknown[] }).items).toBeUndefined();
+  });
+});

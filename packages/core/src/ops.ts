@@ -13,6 +13,7 @@ import type { Database } from "bun:sqlite";
 import { SILVER_PREFIX, type KbConfig } from "./config";
 import { resurface, splitEncrypted, type ResurfaceEntry } from "./resurface";
 import { articleStats, listArticleDays, listLaterArticles } from "./articles";
+import { workSummary, type WorkSummary } from "./work";
 
 export interface CollectSourceSummary {
   id: string;
@@ -47,6 +48,8 @@ export interface OpsDigest {
   review: { due: number; onThisDay: number; /** plaintext entries only (the digest text is stored in the API's job table) */ top: ResurfaceEntry[] } | null;
   /** The latest article day before today (articles.ts): how yesterday's picks fared. Null = no day file yet. */
   articles: { date: string; picked: number; opened: number; saved: number; dismissed: number; /** read-later queue, every day */ later?: number } | null;
+  /** Work tasks and today's work meetings (counts only; Gold 394 has the list). Null without work projects or the index. */
+  work?: WorkSummary | null;
 }
 
 /** Collapse an HTTP error body (often a Cloudflare HTML page) to one line of at most `max` characters. */
@@ -150,6 +153,7 @@ export function buildOpsDigest(cfg: KbConfig, input: OpsDigestInput): OpsDigest 
     agentOk: input.agentOk,
     review: input.db ? reviewSummary(input.db, localDate(now)) : null,
     articles: articlesSummary(cfg, localDate(now)),
+    work: input.db ? workSummary(cfg, input.db, localDate(now)) : null,
   };
 }
 
@@ -170,6 +174,7 @@ export function formatOpsDigest(d: OpsDigest): { title: string; body: string } {
   const [, m, day] = d.date.split("-");
   const title = `${d.agentOk ? "" : "[失敗] "}運用ダイジェスト ${Number(m)}/${Number(day)}`;
   const lines = [collectLine(d), notesLine(d)];
+  if (d.work) lines.push(workLine(d.work));
   if (d.review) lines.push(reviewLine(d.review));
   if (d.articles) lines.push(articlesLine(d.articles));
   if (d.judgements.length) {
@@ -183,6 +188,7 @@ export function formatOpsDigest(d: OpsDigest): { title: string; body: string } {
 export function renderOpsDigest(d: OpsDigest): string {
   const lines = [`# 運用ダイジェスト ${d.date}${d.agentOk ? "" : "（ingest 失敗）"}`, "", collectLine(d), `inbox: feed ${d.inbox.feeds} / mail ${d.inbox.mails} / その他 ${d.inbox.other}`, notesLine(d)];
   for (const s of d.collect) if (s.status === "failed") lines.push(`  ${s.id}: ${s.error}`);
+  if (d.work) lines.push(workLine(d.work));
   if (d.review) {
     lines.push(reviewLine(d.review));
     for (const e of d.review.top) lines.push(`  ${e.title}: ${e.reason}`);
@@ -190,6 +196,11 @@ export function renderOpsDigest(d: OpsDigest): string {
   if (d.articles) lines.push(articlesLine(d.articles));
   if (d.judgements.length) lines.push("", "迷った点:", ...d.judgements.map((j) => `- ${j}`));
   return lines.join("\n");
+}
+
+/** "仕事: 期限切れ 1 · 7 日以内 2 · 未完了 6 · 今日の予定 3" — counts only (the digest is stored in the API's job table). */
+function workLine(w: WorkSummary): string {
+  return `仕事: ${w.overdue ? `期限切れ ${w.overdue} · ` : ""}7 日以内 ${w.dueSoon} · 未完了 ${w.open} · 今日の予定 ${w.meetingsToday}`;
 }
 
 /** "今日見直すノート N 件" — the count on Gold 393 / the WebUI home, so the morning push leads there. */

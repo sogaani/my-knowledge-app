@@ -29,3 +29,4 @@ export * from "./books";
 export * from "./mail";
 export * from "./resurface";
 export * from "./articles";
+export * from "./work";

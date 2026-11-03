@@ -6,7 +6,7 @@ import {
   ingestFile, ingestUrl, sourceExcerpt, markProcessed, listInbox, putInbox, parseFilters, runQuery, buildGold,
   validateAll, archiveNote, lint, backupBronze, pruneBronze, logAccess, importPortfolio, importHealth, importLocation, importCalendar, importKoboLibrary, importStoryGraphLibrary, isStoryGraphCsv, readMeta, bronzeDir, decodeText, importMail, formatMailImport, runCollectors, type BronzeKind,
   search, VectorStore, embedNotes, makeEmbedder, setupLindera, linderaStatus, resolveTokenizer, readVectorMeta, type SearchMode,
-  LAYOUT, curateArticles, buildHistory, listArticleDays, listLaterArticles, articleStats,
+  LAYOUT, curateArticles, buildHistory, listArticleDays, listLaterArticles, articleStats, collectTasks, dueLabel, today,
 } from "@kb/core";
 
 const argv = process.argv.slice(2);
@@ -20,7 +20,7 @@ function flags(args: string[]) {
     if (a.startsWith("--")) {
       const [k, v] = a.slice(2).split("=");
       if (v !== undefined) f[k] = v;
-      else if (args[i + 1] !== undefined && !args[i + 1].startsWith("--") && ["set", "dest", "kind", "text", "status", "superseded-by", "older-than", "type", "limit", "order", "chars", "title", "folder", "section", "fields", "mode", "account", "max-lookups", "date", "file"].includes(k)) f[k] = args[++i];
+      else if (args[i + 1] !== undefined && !args[i + 1].startsWith("--") && ["set", "dest", "kind", "text", "status", "superseded-by", "older-than", "type", "limit", "order", "chars", "title", "folder", "section", "fields", "mode", "account", "max-lookups", "date", "file", "area"].includes(k)) f[k] = args[++i];
       else f[k] = true;
     } else pos.push(a);
   }
@@ -351,6 +351,18 @@ switch (cmd) {
     }
     die("usage: kb articles curate [--date YYYY-MM-DD] [--dry] [--json] | kb articles history | kb articles stats | kb articles later [--days N] [--json]");
   }
+  case "tasks": {
+    // open tasks of the live projects (tasks.md checkboxes), due dates first: kb tasks [--area work|personal] [--all] [--json]
+    const { f } = flags(argv);
+    const area = f.area === "work" || f.area === "personal" ? f.area : undefined;
+    const db = openDb(cfg);
+    const tasks = collectTasks(cfg, db, { area, includeDone: !!f.all });
+    if (f.json) { json(tasks.map((t) => ({ project: t.project.title, project_path: t.project.path, tasks_path: t.tasksPath, line: t.line, done: t.done, due: t.due ?? null, text: t.text }))); break; }
+    const d = today();
+    for (const t of tasks) console.log(`${t.done ? "[x]" : "[ ]"} ${t.due ? `${t.due}（${dueLabel(t.due, d)}） ` : ""}${t.text} — ${t.project.title}`);
+    if (!tasks.length) console.log("（未完了タスクなし）");
+    break;
+  }
   case "root": {
     console.log(cfg.root);
     break;
@@ -417,6 +429,7 @@ switch (cmd) {
   portfolio import <csv|bronze-id> [--account 楽天証券]   update the portfolio note from a 楽天証券 asset CSV (CP932 ok)
   book import <bronze-id> [--status want|read]   楽天Kobo library export CSV → new book notes (imported: true, purchased_at; existing titles skipped); StoryGraph export CSV → status / started_at / finished_at / rating / review upserted by ISBN or title (a read book never goes back to want)
   mail import <bronze-id>... | --all [--dry-run] [--json]   Gmail items: routine notices (900_system/mail-rules.json) → processed -; money mails → ledger candidates (amount / date / merchant) matched against the ledger
+  tasks [--area work|personal] [--all] [--json]   open tasks (tasks.md checkboxes) of the live projects, due dates first (write a due as （期限 YYYY-MM-DD） in the line)
   query [type=book rating>=4] [--text "..."] [--include-archive] [--json] [--limit n] [--order -updated]
   search "<query>" [type=book ...] [--mode hybrid|vector|keyword] [--limit 10] [--include-archive] [--spoilers] [--json]
                                      semantic + keyword search (LanceDB; Ollama for vectors). ● high / ○ low confidence

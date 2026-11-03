@@ -163,7 +163,7 @@ API に VAPID 鍵があるとき（`VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY`）�
 | `本日の売買シート` | `trade-plan` スキルが当日のシートを作ったとき（従来どおり） | — |
 | `回答: <質問>` | チャット（`ask` ジョブ）の回答が届いたとき。失敗は上の「ジョブ失敗」で | 質問の先頭 60 文字が題名、回答の先頭 200 文字が本文。タップで `/chat`。開いたままのチャット画面は `GET /api/jobs/:id/wait`（long-poll、`done` で起きる）で通知を待たずに回答を出す |
 
-ダイジェストの組み立ては `packages/core/src/ops.ts`（`buildOpsDigest` / `formatOpsDigest`）。collector 側は `runCollectors` が成功したソースの `lastItems` を `collect-state.json` に残す。worker は `kb build` の後に索引（`openDb` + `indexNotes`）を渡し、`buildOpsDigest` がそれで「今日見直すノート」を数える（`packages/core/src/resurface.ts`。索引を渡さなければその行は出ない）。
+ダイジェストの組み立ては `packages/core/src/ops.ts`（`buildOpsDigest` / `formatOpsDigest`）。collector 側は `runCollectors` が成功したソースの `lastItems` を `collect-state.json` に残す。worker は `kb build` の後に索引（`openDb` + `indexNotes`）を渡し、`buildOpsDigest` がそれで「今日見直すノート」を数える（`packages/core/src/resurface.ts`。索引を渡さなければその行は出ない）。同じ索引で「仕事: 期限切れ N · 7 日以内 N · 未完了 N · 今日の予定 N」の行も出す（`packages/core/src/work.ts`。件数だけ。一覧は暗号化した Gold `394_work.md` と `kb tasks --area work`。仕事のプロジェクトが無ければ出ない）。
 
 ### worker の死活
 

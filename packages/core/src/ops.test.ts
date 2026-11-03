@@ -182,3 +182,13 @@ describe("buildOpsDigest / format", () => {
     expect(push.body).toBe("収集: 記録なし\nノート: 新規 0 / 更新 0 · 未処理 Bronze 0 · バックアップ 未実施");
   });
 });
+
+describe("ops digest work line", () => {
+  test("counts only, right after the notes line; no line without work projects", () => {
+    const d = { date: "2026-11-04", collect: [], inbox: { feeds: 0, mails: 0, other: 0 }, notes: { created: 0, updated: 1 }, judgements: [], unprocessedBronze: 0, backupDays: 0, agentOk: true, review: null, articles: null };
+    expect(formatOpsDigest({ ...d, work: { open: 6, overdue: 1, dueSoon: 2, meetingsToday: 3 } }).body.split("\n")[2]).toBe("仕事: 期限切れ 1 · 7 日以内 2 · 未完了 6 · 今日の予定 3");
+    expect(formatOpsDigest({ ...d, work: { open: 2, overdue: 0, dueSoon: 0, meetingsToday: 0 } }).body.split("\n")[2]).toBe("仕事: 7 日以内 0 · 未完了 2 · 今日の予定 0");
+    expect(formatOpsDigest({ ...d, work: null }).body).not.toContain("仕事:");
+    expect(renderOpsDigest({ ...d, work: { open: 6, overdue: 1, dueSoon: 2, meetingsToday: 3 } })).toContain("仕事: 期限切れ 1");
+  });
+});

@@ -10,6 +10,7 @@ import { RECOMMENDATION_TYPE, currentRecommendation, parseSuggestions, readSugge
 import { IMPORTED_SUMMARY, STORYGRAPH_SUMMARY, bookDate, bookYear, unratedImported } from "./books";
 import { renderResurface, renderResurfaceHome, resurface } from "./resurface";
 import { listLaterArticles, renderArticlesGold } from "./articles";
+import { renderWork, workSummary } from "./work";
 
 /** Regenerate every Gold markdown file from the index. Gold is derived; never hand-edited. */
 export function buildGold(cfg: KbConfig, db: Database): string[] {
@@ -199,6 +200,9 @@ export function buildGold(cfg: KbConfig, db: Database): string[] {
 
   // 390 / 391 / 392: views across domains (views.ts)
   buildCrossViews(cfg, db, out, { daily: GOLD.daily, trends: GOLD.trends, upcoming: GOLD.upcoming });
+  // 394: work tasks / calendar / activity (work.ts). Encrypted: it names work projects and tasks.
+  out(GOLD.work, renderWork(cfg, db, today()));
+  const work = workSummary(cfg, db, today());
   // 393: what to look at again today (resurface.ts). Plaintext, so encrypted domains are counted, not named.
   const again = resurface(db, today(), cfg);
   out(GOLD.resurface, renderResurface(again));
@@ -218,6 +222,7 @@ export function buildGold(cfg: KbConfig, db: Database): string[] {
     `- [ライフログ](${GOLD.daily}) — 直近 60 日を 1 日 1 行で`,
     `- [トレンド](${GOLD.trends}) — 月ごとの推移`,
     `- [これからの予定](${GOLD.upcoming}) — 90 日先までの予定・期限`,
+    ...(work ? [`- [仕事](${GOLD.work}) — 未完了タスク ${work.open}${work.overdue ? `（期限切れ ${work.overdue}）` : ""}・今日の予定 ${work.meetingsToday}`] : []),
     `- [サブスクリプション](${GOLD.subscriptions}) — 月額換算 ${formatTotals(monthly)}`,
     `- [金融サービス](${GOLD.finance})`,
     `- [読書](${GOLD.books}/index.md) — 読了 ${byStatus.read?.length ?? 0}, 読書中 ${byStatus.reading?.length ?? 0}`,

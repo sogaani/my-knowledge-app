@@ -61,11 +61,17 @@ export function ledgerSpending(body: string): { date: string; amount: number }[]
   return ledgerRows(body).filter((r) => !/^(収入|振替)$/.test(r.category) && r.amount > 0).map(({ date, amount }) => ({ date, amount }));
 }
 
-/** Dated entries of a project log.md: "## YYYY-MM-DD" headings with bullets, or "- YYYY-MM-DD: text" lines. */
+/**
+ * Dated entries of a project log.md: "## YYYY-MM-DD" headings with bullets, "- YYYY-MM-DD: text" lines, and
+ * "### YYYY-MM-DD title" blocks (a meeting summary: the title is the entry, its bullets are not).
+ */
 export function logEntries(text: string): { date: string; text: string }[] {
   const out: { date: string; text: string }[] = [];
   let current: string | null = null;
   for (const line of text.split("\n")) {
+    const block = /^###\s+(\d{4}-\d{2}-\d{2})\s+(.+)$/.exec(line);
+    if (block) { out.push({ date: block[1]!, text: block[2]!.trim() }); current = null; continue; }
+    if (/^###\s/.test(line)) { current = null; continue; }
     const h = /^##\s+(\d{4}-\d{2}-\d{2})\b/.exec(line);
     if (h) { current = h[1]!; continue; }
     if (/^##\s/.test(line)) { current = null; continue; }

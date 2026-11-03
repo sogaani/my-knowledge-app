@@ -77,6 +77,8 @@ export const GOLD = {
   upcoming: "392_upcoming.md",
   /** Plaintext (unlike 390–392): encrypted domains appear by count only. */
   resurface: "393_resurface.md",
+  /** Work tasks, work calendar and work project activity (work.ts). Encrypted like 390–392. */
+  work: "394_work.md",
 } as const;
 
 /**

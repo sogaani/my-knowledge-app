@@ -30,16 +30,19 @@ export interface CalEvent {
   title: string;
   calendar: string;
   location?: string;
+  /** Extra Google account the event came from (`work`); absent for the default account. */
+  account?: string;
   status: "done" | "planned";
   /** upcoming recurring series: one entry dated at its first upcoming instance */
   recurring?: { count: number; first: string; last: string };
 }
 
-function toEvent(key: string, calendar: string, e: EventItem, status: CalEvent["status"], recurring?: CalEvent["recurring"]): CalEvent {
+function toEvent(key: string, calendar: string, e: EventItem, status: CalEvent["status"], recurring?: CalEvent["recurring"], account?: string): CalEvent {
   const s = e.start.dateTime ?? e.start.date ?? "", en = e.end.dateTime ?? e.end.date ?? "";
   return {
     key, date: localDate(s), start: localTime(s), end: localTime(en), title: e.summary ?? "(無題)", calendar, status,
     ...(e.location ? { location: e.location } : {}),
+    ...(account ? { account } : {}),
     ...(recurring ? { recurring: { count: recurring.count, first: localDate(recurring.first), last: localDate(recurring.last) } } : {}),
   };
 }
@@ -51,7 +54,7 @@ export function replayCalendar(feeds: Feed<CalendarItem | { calendar: string; ca
     for (const it of feed.items) {
       if (!("when" in it) || it.when === "past") {
         const key = `${it.calendarId}|${it.event.id}`;
-        state.set(key, toEvent(key, it.calendar, it.event, "done"));
+        state.set(key, toEvent(key, it.calendar, it.event, "done", undefined, feed.account));
       } else if (it.change === "removed") {
         // feeds before keys were added: match the removed event by calendar, title and start
         const key = it.key ?? [...state.values()].find((e) => e.status === "planned" && e.key.startsWith(`${it.calendarId}|`) && e.title === it.summary && e.date === localDate(it.start))?.key;
@@ -59,7 +62,7 @@ export function replayCalendar(feeds: Feed<CalendarItem | { calendar: string; ca
       } else {
         const key = it.key ?? `${it.calendarId}|${it.event.recurringEventId ?? it.event.id}`;
         if (state.get(key)?.status === "done") continue; // already happened: keep the 実績
-        state.set(key, toEvent(key, it.calendar, it.event, "planned", it.recurring));
+        state.set(key, toEvent(key, it.calendar, it.event, "planned", it.recurring, feed.account));
       }
     }
   }

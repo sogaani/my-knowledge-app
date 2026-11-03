@@ -168,8 +168,18 @@ export const slack: Collector = {
       const r = await api.call<{ messages: Msg[] }>("conversations.replies", { channel: c.id, ts: thread, oldest: sec(from), latest: sec(to), limit: 200 });
       for (const m of r.messages) if (m.ts !== thread && inWindow(m.ts, from, to)) add(kind, c.id, m);
     }
-    for (const c of convs.filter((c) => c.is_im || c.is_mpim)) await history(c, "dm");
-    for (const c of watched) await history(c, "channel");
+    // one unreadable conversation (Slackbot's DM answers channel_not_found) must not sink the run
+    const tolerant = async (c: Conv, kind: SlackKind) => {
+      try {
+        await history(c, kind);
+      } catch (e) {
+        const msg = (e as Error).message;
+        if (!/: (channel_not_found|not_in_channel|is_archived|access_denied)\b/.test(msg)) throw e;
+        log.warn(`slack: skipped ${c.id}: ${msg}`);
+      }
+    };
+    for (const c of convs.filter((c) => (c.is_im && c.user !== "USLACKBOT") || c.is_mpim)) await tolerant(c, "dm");
+    for (const c of watched) await tolerant(c, "channel");
 
     // captures: my reaction with the capture emoji, whenever the message was posted
     const seen = new Set(seenBefore);

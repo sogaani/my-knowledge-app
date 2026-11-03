@@ -834,7 +834,8 @@ describe("slack", () => {
         switch (m) {
           case "auth.test": return r({ user_id: "UME", user: "ani", team: "SORACOM", url: "https://soracom.slack.com/" });
           case "users.conversations": return r({ channels: [
-            { id: "D1", is_im: true, user: "U1" }, { id: "C1", name: "saturn" }, { id: "C2", name: "random" },
+            { id: "D1", is_im: true, user: "U1" }, { id: "DSB", is_im: true, user: "USLACKBOT" }, { id: "D3", is_im: true, user: "U3" },
+            { id: "C1", name: "saturn" }, { id: "C2", name: "random" },
           ] });
           case "search.messages":
             if (q.query!.startsWith("<@UME>")) return r({ messages: { paging: { pages: 1 }, matches: [
@@ -853,6 +854,7 @@ describe("slack", () => {
               { ts: ts("2026-11-02T02:00:00Z"), user: "UME", text: "了解です" },
               { ts: ts("2026-11-02T00:00:00Z"), user: "U2", text: "<@U1> デプロイ完了" },
             ] });
+            if (q.channel === "D3") return { ok: false, error: "channel_not_found" } as T;
             throw new Error(`unexpected history ${q.channel}`);
           case "conversations.replies": return r({ messages: [
             { ts: ts("2026-11-01T03:00:00Z"), user: "U1", text: "明日 10 時でいい？" },

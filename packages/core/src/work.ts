@@ -4,7 +4,8 @@
  * counts on the morning ops digest.
  *
  * Tasks are the checkbox lines of a project's tasks.md. A due date is written in the line as `（期限 2026-11-13）`
- * (also accepted: `期限: 2026-11-13`, `due:2026-11-13`). Work = a project in 200_silver/207_work or with `area: work`.
+ * (also accepted: `期限: 2026-11-13`, `due:2026-11-13`). Work = `area: work`, or a project in 200_silver/207_work without
+ * `area: personal`.
  * Work calendar events are the calendar_log events from the extra Google account named `work` (CalEvent.account).
  * A work project folder may also hold `1on1.md` (weekly blocks `### YYYY-Www …` written by the work-weekly skill) and
  * `glossary.md` (`- **用語**: 説明` lines).
@@ -41,7 +42,8 @@ export function parseTasks(text: string): Task[] {
   return out;
 }
 
-export const isWorkProject = (n: QueryResult) => n.path.startsWith(`${WORK_FOLDER}/`) || n.fm.area === "work";
+/** `area` decides when it is set (a private matter can live in the encrypted 207_work, e.g. a pension transfer); else the folder. */
+export const isWorkProject = (n: QueryResult) => (n.fm.area === "work" || n.fm.area === "personal" ? n.fm.area === "work" : n.path.startsWith(`${WORK_FOLDER}/`));
 
 const projects = (db: Database) =>
   runQuery(db, { filters: [{ field: "type", op: "=", value: "project" }], limit: 100000 }).filter((n) => LIVE.includes(n.status) && !n.path.includes("/_archive/"));

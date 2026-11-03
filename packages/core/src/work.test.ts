@@ -45,6 +45,8 @@ describe("work view", () => {
     note("200_silver/207_work/2026-09_終了/README.md", { ...base, type: "project", title: "終了", status: "done" });
     w("200_silver/207_work/2026-09_終了/tasks.md", "- [ ] 残骸\n");
     note("200_silver/206_projects/2026-10_個人/README.md", { ...base, type: "project", title: "個人" });
+    note("200_silver/207_work/2026-10_年金/README.md", { ...base, type: "project", title: "年金", area: "personal" });
+    w("200_silver/207_work/2026-10_年金/tasks.md", "- [ ] 移換\n");
     w("200_silver/206_projects/2026-10_個人/tasks.md", "- [ ] 私用（期限 2026-11-04）\n");
     // the work account's events carry account: work (replayCalendar takes it from the feed)
     const ev = (id: string, start: string, summary: string) => ({ id, status: "confirmed", summary, start: { dateTime: start }, end: { dateTime: start.replace(/T(\d\d)/, (_, h) => `T${String(Number(h) + 1).padStart(2, "0")}`) } });
@@ -67,7 +69,7 @@ describe("work view", () => {
     indexNotes(cfg, db);
 
     expect(collectTasks(cfg, db, { area: "work" }).map((t) => t.text)).toEqual(["誓約書", "自己紹介", "GitHub"]);
-    expect(collectTasks(cfg, db, { area: "personal" }).map((t) => t.text)).toEqual(["私用"]);
+    expect(collectTasks(cfg, db, { area: "personal" }).map((t) => t.text)).toEqual(["私用", "移換"]);
     expect(workSummary(cfg, db, "2026-11-03")).toEqual({ open: 3, overdue: 1, dueSoon: 1, meetingsToday: 1 });
     const { dated, series } = agenda(events.filter((e) => e.account === "work" && !e.key.includes("@group.")), "2026-11-03");
     expect(dated.map((e) => e.title)).toEqual(["1on1", "研修"]);
@@ -82,6 +84,6 @@ describe("work view", () => {
     expect(md).toContain("| 2026-11-02 |");
     expect(md).toContain("2026-W44（10-26〜10-30）");
     expect(md).toContain("1 語");
-    for (const s of ["私用", "残骸", "古い", "済み", "休み"]) expect(md).not.toContain(s);
+    for (const s of ["私用", "残骸", "古い", "済み", "休み", "移換", "年金"]) expect(md).not.toContain(s);
   });
 });

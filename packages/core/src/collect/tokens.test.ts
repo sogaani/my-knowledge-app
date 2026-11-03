@@ -47,7 +47,7 @@ describe("auth failures", () => {
 
   test("every collector that needs a credential is mapped to exactly one", () => {
     const ids = CREDENTIALS.flatMap((c) => c.sources);
-    expect(ids.sort()).toEqual(["calendar", "github", "gmail", "gmail-review", "health", "meet", "youtube"]);
+    expect(ids.sort()).toEqual(["calendar", "github", "gmail", "gmail-review", "health", "meet", "slack", "youtube"]);
   });
 
   test("one warning per credential, naming the sources that failed; other failures are silent", () => {

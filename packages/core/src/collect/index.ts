@@ -15,3 +15,4 @@ export { type MeetItem, type MeetEntry } from "./sources/meet";
 export { REVIEW_LABEL, REVIEW_PERIOD_DAYS, reviewDue, type ReviewItem } from "./sources/gmail-review";
 export { LINKEDIN_ZIP } from "./sources/linkedin";
 export { parseFeed, feedSlug, feedTargets, type RssEntry } from "./sources/rss";
+export { type SlackItem, type SlackKind } from "./sources/slack";

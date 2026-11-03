@@ -1,10 +1,11 @@
 /**
- * Extra accounts for the Google and GitHub sources.
+ * Extra accounts for the Google, GitHub and Slack sources.
  *
  * The default account's credentials are the plain variables (GOOGLE_REFRESH_TOKEN, GITHUB_TOKEN, …). A second
  * account named <name> ([a-z0-9]+) puts the same variables with a `__<name>` suffix in the .env:
  *   GOOGLE_REFRESH_TOKEN__work  GOOGLE_SOURCES__work=gmail,calendar  GOOGLE_CALENDAR_IDS__work  GMAIL_REVIEW__work=off
  *   GITHUB_TOKEN__work  GITHUB_LOGIN__work
+ *   SLACK_TOKEN__work  SLACK_CHANNELS__work  SLACK_CAPTURE_EMOJI__work
  * Every account runs its own instance of each source: id `calendar@work`, state key `calendar@work`, inbox files
  * `collect-calendar-<from>_<to>@work.json` / `mail-<date>-<category>-<id>@work.json` (the account goes before the
  * extension so the `collect-<source>-*` / `mail-*-<category>-*` patterns ingest routes by keep matching), and the
@@ -34,6 +35,7 @@ export const GOOGLE_SOURCE_SCOPES: Record<GoogleAccountSource, string> = {
 export const ACCOUNT_KEYS = [
   "GOOGLE_REFRESH_TOKEN", "GOOGLE_SOURCES", "GOOGLE_CALENDAR_IDS", "GOOGLE_CALENDAR_HORIZON_DAYS", "YOUTUBE_PLAYLIST_IDS", "GMAIL", "GMAIL_REVIEW",
   "GITHUB_TOKEN", "GITHUB_LOGIN",
+  "SLACK_TOKEN", "SLACK_CHANNELS", "SLACK_CAPTURE_EMOJI",
 ] as const;
 
 export const instanceId = (id: string, account?: string) => (account ? `${id}@${account}` : id);
@@ -65,6 +67,8 @@ const accountsWith = (env: Env, key: string) =>
 export const googleAccounts = (env: Env) => accountsWith(env, "GOOGLE_REFRESH_TOKEN");
 /** Names of the extra GitHub accounts (those with a GITHUB_TOKEN__<name>). */
 export const githubAccounts = (env: Env) => accountsWith(env, "GITHUB_TOKEN");
+/** Names of the extra Slack workspaces (those with a SLACK_TOKEN__<name>). */
+export const slackAccounts = (env: Env) => accountsWith(env, "SLACK_TOKEN");
 
 /** Parse a GOOGLE_SOURCES value (`gmail,calendar,meet`): unknown names dropped, `gmail` adds `gmail-review`, unset = the classic four. */
 export function parseGoogleSources(value: string | undefined): GoogleAccountSource[] {
@@ -95,10 +99,11 @@ export interface CollectorInstance {
 export function collectorInstances(all: Collector[], env: Env): CollectorInstance[] {
   const google = googleAccounts(env).map((a) => ({ account: a, sources: googleSourcesOf(env, a) as string[] }));
   const github = githubAccounts(env);
+  const slack = slackAccounts(env);
   const out: CollectorInstance[] = [];
   for (const c of all) {
     out.push({ id: c.id, collector: c, env });
-    const accounts = c.id === "github" ? github : (GOOGLE_ACCOUNT_SOURCES as readonly string[]).includes(c.id) ? google.filter((g) => g.sources.includes(c.id)).map((g) => g.account) : [];
+    const accounts = c.id === "github" ? github : c.id === "slack" ? slack : (GOOGLE_ACCOUNT_SOURCES as readonly string[]).includes(c.id) ? google.filter((g) => g.sources.includes(c.id)).map((g) => g.account) : [];
     for (const a of accounts) out.push({ id: instanceId(c.id, a), account: a, collector: c, env: accountEnv(env, a) });
   }
   return out;

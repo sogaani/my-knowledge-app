@@ -48,6 +48,7 @@ ingest は「WebUI の投げ込み 1 件 = 1 ジョブ」で、同じ時間帯�
 | `calendar` | 表示中のカレンダー（または `GOOGLE_CALENDAR_IDS`）の予定。キャンセル・辞退は除く。①実績: 前回の終わり〜今に行われた予定 ②将来: 今〜2 年後（`GOOGLE_CALENDAR_HORIZON_DAYS` で変更可）を毎回取得し、前回から新規・変更・削除になった予定だけを出す（繰り返しはシリーズで 1 件） | Google OAuth | ①前回の終わり〜今 ②今〜2 年後の差分 |
 | `youtube` | 高評価した動画（前回からの差分）と `YOUTUBE_PLAYLIST_IDS` の再生リスト | Google OAuth | 差分（カーソルに既知 ID） |
 | `meet` | Google Meet で前回の終わり〜今に**終わった**会議（Meet REST API の `conferenceRecords`）。会議ごとに 開始・終了・参加者の表示名・会議コード・予定名（主カレンダーの同じ会議コードの予定から。無ければ無題）と、文字起こしがあれば発言単位のテキスト（話者付き。同じ話者の連続発言は 1 つに）。録画は Drive のリンクだけ。文字起こしの無い会議も 1 件として残る。**opt-in**: `GOOGLE_SOURCES`（既定アカウント）/ `GOOGLE_SOURCES__<name>` に `meet` を書いたときだけ動く（スコープ `meetings.space.readonly` が増えるので同意し直す）。API の発言テキストは会議から 30 日で消える | Google OAuth（`meetings.space.readonly`。予定名の引き当ては `calendar.readonly` があれば） | 前回の終わり〜今（終了時刻で区切る。進行中の会議は次回） |
+| `slack` | Slack のユーザートークンで読む 5 種（`kind`）: `capture` 自分が `SLACK_CAPTURE_EMOJI`（既定 `memo` 📝）でリアクションしたメッセージ（投稿日を問わない。「KB に入れる」の合図。カーソルに取得済みのキー、初回は窓の中だけ）・`mention` 自分へのメンション（`search.messages`、スレッド込み）・`dm` DM とグループ DM（スレッド返信は窓の中に付いたもの）・`channel` `SLACK_CHANNELS` のチャンネルの全メッセージ・`sent` 自分の発言（`search.messages from:`）。1 メッセージ 1 件で、重なれば capture > mention > dm > channel > sent の先のもの。本文は `<@U…>` などを名前に直して保存し、パーマリンクを付ける。生の API オブジェクトは残さない。通常は追加アカウント（`SLACK_TOKEN__work`）。設定は下の「Slack」 | Slack アプリの User OAuth Token（`xoxp-`。読み取りスコープだけ） | 前回の終わり〜今（capture だけ取得済みキー） |
 | `health` | Google Health API v4 の日別 歩数・距離・消費カロリー・アクティブ時間（`dailyRollUp`）と睡眠（起床日で集計） | Google OAuth（`googlehealth.*.readonly` だけの別トークン。Health API は他のスコープを含むトークンを 403 で拒否する） | 完了した日だけ（昨日まで） |
 | `linkedin` | inbox に置かれた `*LinkedInDataExport*.zip` のプロフィール・職歴・新しいつながり・新しいメッセージ | なし（ZIP を手で置く） | 前回のエクスポートとの差分 |
 | `rss` | `FEED_URLS`（カンマ・空白・改行区切り）の RSS 2.0 / RSS 1.0 / Atom フィード。新着のあるフィードごとに `collect-rss-<slug>-<from>_<to>.json`（slug は URL のホスト + パス。`meta` にフィードの URL と題名）。項目は題名・URL・日付・要約の先頭 300 字だけ。フィードの要約が薄いもの（Hacker News の "Comments" のように 40 字未満や定型句）だけは記事ページを取って本文冒頭 300 字を要約にする（`summary_source: "page"`。1 回の実行で 40 ページまで、同時 4、失敗したホストは再試行しない）。それ以上の本文は取らない（選別は `curate`、取り込みは WebUI の「取り込む」）。パースは Bun 標準の正規表現で素朴に行う（CDATA・実体参照・Atom の `type="html"` は扱う。複雑な XML は想定しない）。1 つのフィードが落ちても他は続け（`WARN` をログに出す）、全部落ちたときだけ失敗 | なし | 差分（カーソルにフィードごとの既知 entry id。初回は窓の中の entry、日付の無いフィードは新しい 50 件） |
@@ -105,7 +106,7 @@ Gmail は最多のソース（3 日で 185 件、うち purchase と finance が
 
 ## 複数アカウント
 
-Google と GitHub は、既定のアカウントのほかに名前付きのアカウントを足せる（`packages/core/src/collect/accounts.ts`）。`.env` の同じ変数に `__<name>` を付ける（`name` は `[a-z0-9]+`）。
+Google・GitHub・Slack は、既定のアカウントのほかに名前付きのアカウントを足せる（`packages/core/src/collect/accounts.ts`）。`.env` の同じ変数に `__<name>` を付ける（`name` は `[a-z0-9]+`）。
 
 | 変数 | 意味 |
 |---|---|
@@ -120,6 +121,19 @@ Google と GitHub は、既定のアカウントのほかに名前付きのア�
 - 会社アカウントで Meet の会議記録を取る例: `bun run collect auth google --account work --sources gmail,calendar,meet`（同意画面に Meet のスコープが増える。Workspace 側で文字起こし / Gemini メモが有効で、会議で文字起こしをオンにしたものだけ発言が付く）。`collect-meet-<from>_<to>@work.json` を `ingest` が 207_work のプロジェクトのログにまとめる。
 - 追加アカウントの Gmail にも同じ Apps Script（`900_system/gas/emailfilter/`。`KB/*` と `KB/取込済`・`システム/要確認` のラベル）を入れる。collector はラベルを読むだけで、分類はしない。
 - 会社の Google Workspace は、管理者が未確認の OAuth クライアント（デスクトップ アプリ）を止めていることがある。同意画面が拒否するならこちらで設定できることは無い（管理者にクライアント ID の許可を頼む）。
+- Slack も同じ形（`SLACK_TOKEN__work` / `SLACK_CHANNELS__work` / `SLACK_CAPTURE_EMOJI__work`）。インスタンスは `slack@work`、ファイルは `collect-slack-<from>_<to>@work.json`。
+
+## Slack
+
+1. api.slack.com/apps → Create New App → **From a manifest** → 仕事のワークスペースを選び、`apps/collector/slack-manifest.yaml` を貼って作る（ユーザースコープの読み取りだけ。bot は無い。トークンのローテーションは off なので期限は無い）。
+2. Install to Workspace。ワークスペースがアプリの承認制なら、管理者の承認を待つ（承認されるまでトークンは出ない。こちらで回避できることは無い）。
+3. OAuth & Permissions の **User OAuth Token**（`xoxp-…`）を `apps/collector/.env` の `SLACK_TOKEN__work` に書く。必要なら `SLACK_CHANNELS__work`（全メッセージを取るチャンネル。名前か ID のカンマ区切り。自分が参加しているもの）と `SLACK_CAPTURE_EMOJI__work`（既定 `memo`）。
+4. `bun run collect status` で `slack@work` が configured、`bun run collect slack@work --dry-run` で件数を見る。
+
+- 「KB に入れたい」メッセージには 📝 を付けておくと、次の朝の `ingest` が 207_work のタスクかログにする（古いメッセージでもよい）。自分へのメンションと DM は付けなくても毎朝入る。
+- 社内向けのアプリ（自分のワークスペースにだけ入れたもの）は、2025-05 に Marketplace 外の配布アプリに入った `conversations.history` の厳しい制限の対象外で、Tier 3（毎分 50 回程度）。429 は `Retry-After` を待って再試行する。DM の数だけ `conversations.history` を呼ぶので、初回は数分かかることがある。
+- Slack はエラーも HTTP 200 の `{ ok: false, error }` で返す。`invalid_auth` / `token_revoked` / `account_inactive` などは認証失敗として通知する（直し方: アプリを再インストールして新しいトークンを書く）。スコープ不足は `(needs scope …)` 付きのエラーになる（マニフェストにスコープを足して再インストール）。
+- 会社のメッセージ（他人の発言を含む）が Mac の Bronze と暗号化ドメイン 207_work に入る。社内規程で個人の記録が許されるか、入れる前に確かめる。
 
 ## 運用
 
@@ -134,7 +148,7 @@ Google と GitHub は、既定のアカウントのほかに名前付きのア�
 - 失敗したソースだけが止まり（Google は `… expired or revoked (invalid_grant): run bun run collect auth …`、GitHub は `HTTP 401 … Bad credentials`）、他のソースは続行する。期間は前回の位置から取り直すので、取りこぼしは出ない（Gmail は未取得ラベル基準）。
 - 毎朝の実行（launchd）が、資格情報ごとに 1 通の macOS 通知を出す（「Gmail / Calendar / YouTube の認証に失敗しました（gmail, calendar）。bun run collect auth google」）。ログ `collect.log` にも `WARN` が出る。quota 超過やフィードの障害など認証以外の失敗は通知しない（ログと運用ダイジェストに出る）。
 - 07:00 の運用ダイジェストの「収集:」行は、認証で失敗したソースを `gmail 認証失敗` と出す（他の失敗は `失敗`）。`bun run collect status` の `last error` にも残る。
-- 直し方: Google は `bun run collect auth`（2 つとも）か `bun run collect auth google` / `auth google-health`（片方。同意し直すと新しいトークンが `.env` に書き込まれる）。GitHub は Settings → Developer settings → Fine-grained tokens → Regenerate token して `GITHUB_TOKEN` を書き換える。追加アカウント（上の「複数アカウント」）は `auth google --account <name>` と `GITHUB_TOKEN__<name>`。
+- 直し方: Google は `bun run collect auth`（2 つとも）か `bun run collect auth google` / `auth google-health`（片方。同意し直すと新しいトークンが `.env` に書き込まれる）。GitHub は Settings → Developer settings → Fine-grained tokens → Regenerate token して `GITHUB_TOKEN` を書き換える。Slack はアプリを再インストールして User OAuth Token を `SLACK_TOKEN__<name>` に書き直す。追加アカウント（上の「複数アカウント」）は `auth google --account <name>` と `GITHUB_TOKEN__<name>`。
 
 Google の同意画面が「テスト」のままだと、リフレッシュトークンは同意から 7 日で失効する（使っていても延長されない）。`invalid_grant` が 7 日ごとに出るならそれが原因なので、Cloud Console → Google Auth Platform → Audience → **Publish app** で公開し、`bun run collect auth` で取り直す（`gmail.modify` は restricted scope なので「確認されていません」の警告が出るが、自分のアカウントなら「詳細 → 移動」で同意できる）。
 

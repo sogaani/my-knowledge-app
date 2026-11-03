@@ -792,3 +792,99 @@ describe("meet", () => {
     expect(warned[0]).toContain("calendar titles unavailable");
   });
 });
+
+describe("slack", () => {
+  const { slack, plainText, permalink } = require("./sources/slack") as typeof import("./sources/slack");
+  const { isAuthError, credentials } = require("./tokens") as typeof import("./tokens");
+  const { collectorInstances } = require("./accounts") as typeof import("./accounts");
+  const { COLLECTORS } = require("./registry") as typeof import("./registry");
+  const log = { info() {}, warn() {} };
+  const from = new Date("2026-11-01T00:00:00Z"), to = new Date("2026-11-03T00:00:00Z");
+  const ts = (iso: string) => (Date.parse(iso) / 1000).toFixed(6);
+
+  test("text and permalinks", () => {
+    const names = new Map([["U1", "田中"]]);
+    expect(plainText("<@U1> 見て <#C9|saturn> <https://x.example/a|資料> <!here> &lt;b&gt;", (id) => names.get(id))).toBe("@田中 見て #saturn 資料 (https://x.example/a) @here <b>");
+    expect(permalink("https://soracom.slack.com/", "C9", "1730600000.123456")).toBe("https://soracom.slack.com/archives/C9/p1730600000123456");
+    expect(permalink("https://soracom.slack.com/", "C9", "1730600001.000100", "1730600000.123456")).toBe("https://soracom.slack.com/archives/C9/p1730600001000100?thread_ts=1730600000.123456&cid=C9");
+  });
+
+  test("extra workspace account, credentials and auth errors", () => {
+    const env = { SLACK_TOKEN__work: "xoxp-1", SLACK_CHANNELS__work: "saturn" };
+    const inst = collectorInstances(COLLECTORS, env).filter((i) => i.collector.id === "slack");
+    expect(inst.map((i) => i.id)).toEqual(["slack", "slack@work"]);
+    expect(inst[1]!.env.SLACK_TOKEN).toBe("xoxp-1");
+    expect(inst[1]!.env.SLACK_CHANNELS).toBe("saturn");
+    expect(slack.configured(inst[0]!.env)).toContain("missing SLACK_TOKEN");
+    expect(credentials(env).find((c) => c.id === "slack@work")?.sources).toEqual(["slack@work"]);
+    expect(isAuthError("Slack auth.test: invalid_auth")).toBe(true);
+    expect(isAuthError("Slack conversations.history: ratelimited")).toBe(false);
+  });
+
+  test("collect: mentions, sent, DMs with thread replies, watched channel, captures; one item per message by priority", async () => {
+    const calls: string[] = [];
+    const http = {
+      async fetch(): Promise<Response> { throw new Error("unused"); },
+      async json<T>(url: string): Promise<T> {
+        const u = new URL(url);
+        const m = u.pathname.replace("/api/", "");
+        const q = Object.fromEntries(u.searchParams);
+        calls.push(m);
+        const r = (body: object) => ({ ok: true, ...body }) as T;
+        switch (m) {
+          case "auth.test": return r({ user_id: "UME", user: "ani", team: "SORACOM", url: "https://soracom.slack.com/" });
+          case "users.conversations": return r({ channels: [
+            { id: "D1", is_im: true, user: "U1" }, { id: "C1", name: "saturn" }, { id: "C2", name: "random" },
+          ] });
+          case "search.messages":
+            if (q.query!.startsWith("<@UME>")) return r({ messages: { paging: { pages: 1 }, matches: [
+              { ts: ts("2026-11-02T01:00:00Z"), user: "U1", text: "<@UME> レビューお願いします", channel: { id: "C2", name: "random" }, permalink: "https://soracom.slack.com/archives/C2/p1" },
+              { ts: ts("2026-10-30T01:00:00Z"), user: "U1", text: "<@UME> old", channel: { id: "C2", name: "random" } },
+            ] } });
+            return r({ messages: { paging: { pages: 1 }, matches: [
+              { ts: ts("2026-11-02T02:00:00Z"), user: "UME", text: "了解です", channel: { id: "C1", name: "saturn" } },
+            ] } });
+          case "conversations.history":
+            if (q.channel === "D1") return r({ messages: [
+              { ts: ts("2026-11-01T03:00:00Z"), user: "U1", text: "明日 10 時でいい？", reply_count: 1, latest_reply: ts("2026-11-01T04:00:00Z") },
+              { ts: ts("2026-11-01T02:00:00Z"), subtype: "channel_join", user: "U1", text: "joined" },
+            ] });
+            if (q.channel === "C1") return r({ messages: [
+              { ts: ts("2026-11-02T02:00:00Z"), user: "UME", text: "了解です" },
+              { ts: ts("2026-11-02T00:00:00Z"), user: "U2", text: "<@U1> デプロイ完了" },
+            ] });
+            throw new Error(`unexpected history ${q.channel}`);
+          case "conversations.replies": return r({ messages: [
+            { ts: ts("2026-11-01T03:00:00Z"), user: "U1", text: "明日 10 時でいい？" },
+            { ts: ts("2026-11-01T04:00:00Z"), thread_ts: ts("2026-11-01T03:00:00Z"), user: "UME", text: "OK" },
+          ] });
+          case "reactions.list": return r({ paging: { pages: 1 }, items: [
+            { type: "message", channel: "C2", message: { ts: ts("2026-11-02T01:00:00Z"), user: "U1", text: "<@UME> レビューお願いします", reactions: [{ name: "memo", users: ["UME"] }] } },
+            { type: "message", channel: "C2", message: { ts: ts("2026-10-01T01:00:00Z"), user: "U2", text: "old capture", reactions: [{ name: "memo", users: ["UME"] }] } },
+            { type: "message", channel: "C2", message: { ts: ts("2026-11-02T05:00:00Z"), user: "U2", text: "other emoji", reactions: [{ name: "eyes", users: ["UME"] }] } },
+          ] });
+          case "users.info": return r({ user: { name: q.user, profile: { display_name: q.user === "U1" ? "田中" : q.user === "UME" ? "ani" : "鈴木" } } });
+          default: throw new Error(`unexpected ${m}`);
+        }
+      },
+    };
+    const res = await slack.collect({ cfg: {} as never, env: { SLACK_TOKEN: "xoxp", SLACK_CHANNELS: "#saturn" }, from, to, cursor: undefined, http, google: {} as never, log, dryRun: false });
+    const items = res.items as import("./sources/slack").SlackItem[];
+    expect(items.map((i) => [i.kind, i.channel, i.who, i.text])).toEqual([
+      ["dm", "DM 田中", "田中", "明日 10 時でいい？"],
+      ["dm", "DM 田中", "自分", "OK"],
+      ["channel", "#saturn", "鈴木", "@田中 デプロイ完了"],
+      ["capture", "#random", "田中", "@ani レビューお願いします"],
+      ["channel", "#saturn", "自分", "了解です"],
+    ]);
+    expect(items[1]!.permalink).toContain("?thread_ts=");
+    expect(items[3]!.permalink).toBe("https://soracom.slack.com/archives/C2/p1");
+    expect(JSON.parse(res.cursor!).seen).toEqual([`C2:${ts("2026-11-02T01:00:00Z")}`]);
+    expect(slack.digest(items[0])).toMatch(/^\d{4}-\d\d-\d\d \d\d:\d\d \[dm\] DM 田中 田中: 明日 10 時でいい？（返信 1） https:/);
+
+    // next run: the capture already taken is not repeated, an old message reacted to now is taken
+    const again = await slack.collect({ cfg: {} as never, env: { SLACK_TOKEN: "xoxp" }, from, to, cursor: res.cursor, http, google: {} as never, log, dryRun: false });
+    const caps = (again.items as import("./sources/slack").SlackItem[]).filter((i) => i.kind === "capture").map((i) => i.text);
+    expect(caps).toEqual(["old capture"]);
+  });
+});

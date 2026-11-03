@@ -1,0 +1,25 @@
+# Slack app for the collector's `slack` source (read-only user token). docs/collect.md「Slack」.
+# api.slack.com/apps → Create New App → From a manifest → the work workspace → paste this → Create →
+# Install to Workspace (an admin may have to approve) → OAuth & Permissions → copy the User OAuth Token (xoxp-…)
+# into apps/collector/.env as SLACK_TOKEN__work. Token rotation stays off, so the token does not expire.
+display_information:
+  name: my-knowledge collector
+  description: Reads my mentions, DMs, my own messages and chosen channels into my personal knowledge base (read-only).
+settings:
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false
+oauth_config:
+  scopes:
+    user:
+      - search:read      # mentions of me / my own messages (search.messages)
+      - channels:read    # users.conversations: my channels
+      - groups:read
+      - im:read
+      - mpim:read
+      - channels:history # conversations.history / replies: SLACK_CHANNELS, DMs
+      - groups:history
+      - im:history
+      - mpim:history
+      - users:read       # display names
+      - reactions:read   # reactions.list: the capture emoji

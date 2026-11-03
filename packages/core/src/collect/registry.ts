@@ -9,5 +9,6 @@ import { health } from "./sources/health";
 import { meet } from "./sources/meet";
 import { linkedin } from "./sources/linkedin";
 import { rss } from "./sources/rss";
+import { slack } from "./sources/slack";
 
-export const COLLECTORS: Collector[] = [gmail, gmailReview, github, calendar, youtube, meet, health, linkedin, rss];
+export const COLLECTORS: Collector[] = [gmail, gmailReview, github, calendar, youtube, meet, slack, health, linkedin, rss];

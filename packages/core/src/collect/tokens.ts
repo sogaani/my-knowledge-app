@@ -5,7 +5,7 @@
  * (Google invalid_grant, GitHub 401) is an auth failure: the daily run sends a macOS notification naming the
  * credential and how to renew it, and the morning ops digest marks the source as 認証失敗.
  */
-import { githubAccounts, googleAccounts, googleSourcesOf, instanceId } from "./accounts";
+import { githubAccounts, googleAccounts, googleSourcesOf, instanceId, slackAccounts } from "./accounts";
 import { GOOGLE_TOKENS, isExpiredTokenError } from "./google";
 import type { Env } from "./types";
 
@@ -28,6 +28,7 @@ const GOOGLE_SOURCES: Record<(typeof GOOGLE_TOKENS)[number]["name"], string[]> =
 export const CREDENTIALS: Credential[] = [
   ...GOOGLE_TOKENS.map((t) => ({ id: t.name, label: t.label, envVar: t.envVar, sources: GOOGLE_SOURCES[t.name], renew: `bun run collect auth ${t.name}` })),
   { id: "github", label: "GitHub PAT", envVar: "GITHUB_TOKEN", sources: ["github"], renew: "GitHub で再生成して GITHUB_TOKEN を書き換える" },
+  { id: "slack", label: "Slack", envVar: "SLACK_TOKEN", sources: ["slack"], renew: "Slack アプリを再インストールして User OAuth Token を SLACK_TOKEN に書き換える" },
 ];
 
 /** The default account's credentials plus one per extra Google / GitHub account found in the env (accounts.ts). */
@@ -42,11 +43,16 @@ export function credentials(env: Env): Credential[] {
       id: `github@${a}`, label: `GitHub PAT ${a}`, envVar: `GITHUB_TOKEN__${a}`, sources: [instanceId("github", a)],
       renew: `GitHub で再生成して GITHUB_TOKEN__${a} を書き換える`,
     })),
+    ...slackAccounts(env).map((a) => ({
+      id: `slack@${a}`, label: `Slack ${a}`, envVar: `SLACK_TOKEN__${a}`, sources: [instanceId("slack", a)],
+      renew: `Slack アプリを再インストールして User OAuth Token を SLACK_TOKEN__${a} に書き換える`,
+    })),
   ];
 }
 
-/** A source error that means the credential was refused: Google's invalid_grant (revoked / consent withdrawn) or a 401. */
-export const isAuthError = (msg: string) => isExpiredTokenError(msg) || /\bHTTP 401\b|bad credentials/i.test(msg);
+/** A source error that means the credential was refused: Google's invalid_grant (revoked / consent withdrawn), a 401, or Slack's auth errors. */
+export const isAuthError = (msg: string) =>
+  isExpiredTokenError(msg) || /\bHTTP 401\b|bad credentials/i.test(msg) || /\bSlack [a-z.]+: (invalid_auth|not_authed|token_revoked|token_expired|account_inactive)\b/.test(msg);
 
 /** One line per credential whose sources failed to authenticate in this run; nothing for any other failure. */
 export function authFailures(reports: { id: string; status: string; reason?: string }[], env: Env = {}): string[] {

@@ -29,8 +29,20 @@ GET /api/captures/:id · GET /api/captures?key=<platform>:<conversation id> · G
 | `area` | `work` / `personal`; unset = the ingest decides |
 | `note`, `account`, `captured_at` | why it was saved; the platform account (`work`); when |
 
-Answer: `{ capture, duplicate }`. The same key with the same content as its newest version is a duplicate (nothing
-queued) unless that version failed; changed content is the next `version`.
+Answer: `{ capture, duplicate, replaced? }`. Duplicates are stopped at three points:
+
+1. **Same content** — the same key whose newest version has the same `hash` → `duplicate: true`, nothing queued (unless
+   that version failed). The hash is over the body **without a leading YAML frontmatter block**, with line endings and
+   trailing spaces normalised: the extension renders an Obsidian note whose `created` / `modified` are the sync time, so
+   hashing the raw text would make every click "new". A capture without a body hashes its URL.
+2. **Changed while waiting** — the newest version's ingest job is still `queued` (the worker has not claimed it) → its
+   content is replaced in place (`replaced: true`): same id, version and job, one copy staged.
+3. **Changed after the worker took it** → the next `version`. `previous_notes` is filled when the worker fetches the
+   inbox item (`GET /api/worker/inbox/:id` renders the file from `captures.input`), so a version queued while the
+   previous one was being ingested still points at the notes that one made, and the ingest updates them.
+
+Below the API, Bronze drops a file whose bytes it already holds (`ingestFile`'s SHA-256 check), which covers repeated
+`kb capture` runs that fell back to the local inbox.
 
 ## What the ingest gets
 The inbox file is YAML frontmatter (`capture_id`, `capture_key`, `version`, `client`, `platform`, `title`, `url`,

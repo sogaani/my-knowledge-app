@@ -173,7 +173,7 @@ describe("captures", () => {
   const add = (key: string, version: number, hash: string) => {
     const job = s.createJob("ingest", { items: [] });
     const id = s.newId();
-    s.addCapture({ id, key, version, hash, client: "chrome", platform: "gemini", title: "t", url: null, area: null, job_id: job.id, item_name: `capture-${id}.md` });
+    s.addCapture({ id, key, version, hash, client: "chrome", platform: "gemini", title: "t", url: null, area: null, job_id: job.id, item_name: `capture-${id}.md`, input: "{}" });
     return { id, job };
   };
   test("settle from the worker's per-item outcomes", () => {
@@ -198,5 +198,17 @@ describe("captures", () => {
     // settled rows are not touched again
     s.settleCaptures(b.job.id, true, [{ name: `capture-${b.id}.md`, bronze: "x", notes: [], processed: true }]);
     expect(s.getCaptureRow(b.id)?.status).toBe("failed");
+  });
+  test("a version still waiting for the worker is replaced in place; a claimed one is not", () => {
+    const a = add("chatgpt:9", 1, "h1");
+    s.addInboxItem({ id: s.newId(), job_id: a.job.id, kind: "text", name: `capture-${a.id}.md`, path: null, url: null, text: "old" });
+    expect(s.replaceQueuedCapture(a.id, { hash: "h2", title: "t2", url: null, area: "work", input: '{"x":1}', text: "new" })).toBe(true);
+    expect(s.getCaptureRow(a.id)).toMatchObject({ hash: "h2", title: "t2", area: "work", version: 1, input: '{"x":1}' });
+    expect(s.inboxItemsForJob(a.job.id)[0]?.text).toBe("new");
+    expect(s.captureForItem(a.job.id, `capture-${a.id}.md`)?.id).toBe(a.id);
+    // the worker claimed the job: no more in-place replacement
+    s.claimQueuedJobs("ingest");
+    expect(s.replaceQueuedCapture(a.id, { hash: "h3", title: "t3", url: null, area: null, input: "{}", text: "newer" })).toBe(false);
+    expect(s.getCaptureRow(a.id)?.hash).toBe("h2");
   });
 });

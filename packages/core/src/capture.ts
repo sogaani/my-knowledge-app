@@ -71,7 +71,15 @@ export function parseCapture(body: unknown): { ok: true; value: CaptureInput } |
 }
 
 const sha256 = (s: string) => createHash("sha256").update(s).digest("hex");
-export const contentHash = (c: Pick<CaptureInput, "markdown" | "url">) => sha256(`${c.url ?? ""}\n${c.markdown}`);
+/**
+ * What counts as "the same content": the body without a leading YAML frontmatter block (the Chrome extension renders an
+ * Obsidian note whose `created` / `modified` are the time of the sync, so they change on every click), with line endings
+ * and trailing spaces normalised. A capture with no body (a shared link) is its URL.
+ */
+export function contentHash(c: Pick<CaptureInput, "markdown" | "url">): string {
+  const body = c.markdown.replace(/^\uFEFF?---\r?\n[\s\S]*?\r?\n---[ \t]*(\r?\n|$)/, "").replace(/\r\n?/g, "\n").replace(/[ \t]+$/gm, "").trim();
+  return sha256(body || `url:${c.url ?? ""}`);
+}
 
 /** Identity of the thing captured, stable across re-syncs: `<platform>:<conversation id | url | body hash>`. */
 export function captureKey(c: Pick<CaptureInput, "platform" | "conversation_id" | "url" | "markdown">): string {

@@ -29,6 +29,13 @@ describe("capture identity", () => {
     expect(captureKey(a)).toBe("claude:c-1");
     expect(captureKey({ ...a, markdown: "v2" })).toBe("claude:c-1");
     expect(contentHash(a)).not.toBe(contentHash({ ...a, markdown: "v2" }));
+    // the extension's note frontmatter carries the sync time: re-syncing an unchanged conversation is the same content
+    const note = (t: string, body: string) => `---\nid: gemini_abc\ncreated: ${t}\nmodified: ${t}\n---\n\n${body}\n`;
+    expect(contentHash({ markdown: note("2026-11-03 10:00", "Q\r\nA  "), url: "https://gemini.google.com/app/abc" }))
+      .toBe(contentHash({ markdown: note("2026-11-03 11:30", "Q\nA"), url: "https://gemini.google.com/app/abc?hl=ja" }));
+    expect(contentHash({ markdown: note("t", "Q\nA"), url: undefined })).not.toBe(contentHash({ markdown: note("t", "Q\nA\nmore"), url: undefined }));
+    // a link with no body is its URL
+    expect(contentHash({ markdown: "", url: "https://x.test/a" })).not.toBe(contentHash({ markdown: "", url: "https://x.test/b" }));
     // no id: the url, else the body
     expect(captureKey({ platform: "web", url: "https://x.test/a", markdown: "" })).toMatch(/^web:url:[0-9a-f]{16}$/);
     expect(captureKey({ platform: "claude-code", markdown: "x" })).toMatch(/^claude-code:body:/);

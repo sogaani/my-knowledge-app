@@ -6,7 +6,7 @@ import {
   runQuery, parseFilters, readNote, patchFrontmatter, createNote, DuplicateError, extractLinks, currentRecommendation, reactToSuggestion, REACTIONS,
   keywordSearch, monthlyByCurrency, errorHead, similarNotes, neighborNotes, noteHeads, resurface, LAYOUT, SILVER_PREFIX, GOLD_PREFIX, type SearchResponse, type SearchMode, type Reaction,
   listArticleDays, listLaterArticles, reactToArticle, ARTICLE_REACTIONS, type ArticleReaction,
-  parseCapture, captureKey, contentHash, captureFileName, renderCaptureFile, type ItemOutcome,
+  parseCapture, captureKey, contentHash, captureFileName, renderCaptureFile, type ItemOutcome, type CaptureInput,
 } from "@kb/core";
 import { env } from "./env";
 import { authenticate, requireUser, requireWorker, requireUserOrWorker, requireCapturer, type Principal } from "./auth";
@@ -15,7 +15,7 @@ import {
   createJob, getJob, listJobs, claimNextJob, claimQueuedJobs, appendJobLog, touchJob, finishJob, requeueStale, pruneSearchJobs, waitJobEvent,
   addInboxItem, inboxItemNameExists, inboxItemsForJob, getInboxItem, markInboxFetched, addChat, listExchanges, newId, type JobKind, type ChatMessage,
   addPushSubscription, deletePushSubscription, listPushSubscriptions, recordView, lastViewed, viewCount,
-  addCapture, getCaptureRow, latestCapture, lastCaptureNotes, listCaptureRows, settleCaptures, type CaptureRow,
+  addCapture, getCaptureRow, latestCapture, lastCaptureNotes, listCaptureRows, settleCaptures, replaceQueuedCapture, captureForItem, type CaptureRow,
 } from "./store";
 import { askDonePush, pushEnabled, sendPushToAll, type PushPayload } from "./push";
 
@@ -340,8 +340,13 @@ function captureView(r: CaptureRow) {
   };
 }
 /**
- * Accept a capture. The same key with the same content as its newest version → that version back with
- * `duplicate: true` (nothing queued) unless it failed; otherwise the next version: an inbox item + an ingest job.
+ * Accept a capture. Duplicates are stopped at three points:
+ * - the same key with the same content (body without its frontmatter, see contentHash) as the newest version → that
+ *   version back with `duplicate: true`, nothing queued (unless it failed);
+ * - changed content while the newest version is still waiting for the worker → that version's content is replaced in
+ *   place (`replaced: true`), so the worker stages one copy;
+ * - otherwise the next version. Its inbox file gets `previous_notes` when the worker fetches it (not now), so a version
+ *   sent while the previous one was being ingested still updates the notes that one made.
  */
 api.post("/captures", requireCapturer, async (c) => {
   let body: unknown;
@@ -352,13 +357,20 @@ api.post("/captures", requireCapturer, async (c) => {
   const key = captureKey(input), hash = contentHash(input);
   const last = latestCapture(key);
   if (last && last.hash === hash && captureView(last).status !== "failed") return c.json({ capture: captureView(last), duplicate: true });
+  if (last && last.status === "queued") {
+    const text = renderCaptureFile(input, { capture_id: last.id, key, version: last.version, hash, previous_notes: lastCaptureNotes(key) });
+    if (replaceQueuedCapture(last.id, { hash, title: input.title, url: input.url ?? null, area: input.area ?? null, input: JSON.stringify(input), text })) {
+      console.log(`capture ${last.id.slice(0, 8)} ${input.client}/${input.platform} v${last.version} replaced while queued`);
+      return c.json({ capture: captureView(getCaptureRow(last.id)!), duplicate: false, replaced: true });
+    }
+  }
   const id = newId(), jobId = newId(), itemId = newId();
   const version = (last?.version ?? 0) + 1;
   const name = captureFileName(key, hash);
   const text = renderCaptureFile(input, { capture_id: id, key, version, hash, previous_notes: lastCaptureNotes(key) });
   addInboxItem({ id: itemId, job_id: jobId, kind: "text", name, path: null, url: null, text });
   createJob("ingest", { items: [{ id: itemId, kind: "text", name }], capture: id }, jobId);
-  const row = addCapture({ id, key, version, hash, client: input.client, platform: input.platform, title: input.title, url: input.url ?? null, area: input.area ?? null, job_id: jobId, item_name: name });
+  const row = addCapture({ id, key, version, hash, client: input.client, platform: input.platform, title: input.title, url: input.url ?? null, area: input.area ?? null, job_id: jobId, item_name: name, input: JSON.stringify(input) });
   console.log(`capture ${id.slice(0, 8)} ${input.client}/${input.platform} v${version} ${Buffer.byteLength(text)}B`);
   return c.json({ capture: captureView(row), duplicate: false });
 });
@@ -453,7 +465,15 @@ w.get("/inbox/:id", (c) => {
   if (!it) return c.json({ error: "not found" }, 404);
   markInboxFetched(it.id);
   if (it.kind === "file" && it.path) return new Response(Bun.file(it.path), { headers: { "content-disposition": `attachment; filename="${encodeURIComponent(it.name)}"` } });
-  if (it.kind === "text") return c.text(it.text ?? "");
+  if (it.kind === "text") {
+    // a capture: render now, so previous_notes includes a version that finished after this one was queued
+    const cap = it.name.startsWith("capture-") ? captureForItem(it.job_id, it.name) : null;
+    if (cap?.input) {
+      const input = JSON.parse(cap.input) as CaptureInput;
+      return c.text(renderCaptureFile(input, { capture_id: cap.id, key: cap.key, version: cap.version, hash: cap.hash, previous_notes: lastCaptureNotes(cap.key) }));
+    }
+    return c.text(it.text ?? "");
+  }
   return c.json({ url: it.url });
 });
 w.post("/jobs/:id/log", async (c) => { appendJobLog(c.req.param("id") ?? "", await c.req.text()); return c.json({ ok: true }); });

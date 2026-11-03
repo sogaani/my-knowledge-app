@@ -48,6 +48,8 @@ CREATE TABLE IF NOT EXISTS captures (
 CREATE INDEX IF NOT EXISTS captures_key ON captures(key, version);
 CREATE INDEX IF NOT EXISTS captures_job ON captures(job_id);
 `);
+// captures.input (the request, to render the inbox file when the worker fetches it) came after the table
+if (!(store.query("PRAGMA table_info(captures)").all() as { name: string }[]).some((c) => c.name === "input")) store.exec("ALTER TABLE captures ADD COLUMN input TEXT");
 // added after the first release: older jobs.sqlite files lack the column
 if (!(store.query("PRAGMA table_info(jobs)").all() as { name: string }[]).some((c) => c.name === "heartbeat_at")) store.exec("ALTER TABLE jobs ADD COLUMN heartbeat_at TEXT");
 
@@ -208,12 +210,34 @@ export type CaptureStatus = "queued" | "running" | "done" | "stored" | "failed";
 export interface CaptureRow {
   id: string; key: string; version: number; hash: string; client: string; platform: string; title: string; url: string | null; area: string | null;
   job_id: string; item_name: string; status: CaptureStatus; bronze: string | null; notes: string; error: string | null; created_at: string; updated_at: string;
+  /** The CaptureInput as JSON (null for rows from before the column). */
+  input: string | null;
 }
 export function addCapture(r: Omit<CaptureRow, "status" | "bronze" | "notes" | "error" | "created_at" | "updated_at">): CaptureRow {
   const t = now();
-  store.run("INSERT INTO captures(id,key,version,hash,client,platform,title,url,area,job_id,item_name,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-    [r.id, r.key, r.version, r.hash, r.client, r.platform, r.title, r.url, r.area, r.job_id, r.item_name, "queued", t, t]);
+  store.run("INSERT INTO captures(id,key,version,hash,client,platform,title,url,area,job_id,item_name,status,created_at,updated_at,input) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+    [r.id, r.key, r.version, r.hash, r.client, r.platform, r.title, r.url, r.area, r.job_id, r.item_name, "queued", t, t, r.input]);
   return getCaptureRow(r.id)!;
+}
+/**
+ * A newer copy of a version whose ingest job has not been claimed yet: replace its content in place (same id, version
+ * and job), so re-syncing a conversation before the worker got to it never stages two copies. The inbox item text is
+ * rewritten too. Returns false when the job was claimed meanwhile (the caller then makes a new version).
+ */
+export function replaceQueuedCapture(id: string, r: { hash: string; title: string; url: string | null; area: string | null; input: string; text: string }): boolean {
+  const tx = store.transaction(() => {
+    const row = getCaptureRow(id);
+    const job = row && getJob(row.job_id);
+    if (!row || job?.status !== "queued") return false;
+    store.run("UPDATE captures SET hash=?, title=?, url=?, area=?, input=?, updated_at=? WHERE id=?", [r.hash, r.title, r.url, r.area, r.input, now(), id]);
+    store.run("UPDATE inbox_items SET text=? WHERE job_id=? AND name=?", [r.text, row.job_id, row.item_name]);
+    return true;
+  });
+  return tx();
+}
+/** The capture staged as this inbox item (to render its file with the notes known at fetch time). */
+export function captureForItem(jobId: string, name: string): CaptureRow | null {
+  return store.query("SELECT * FROM captures WHERE job_id=? AND item_name=?").get(jobId, name) as CaptureRow | null;
 }
 export function getCaptureRow(id: string): CaptureRow | null {
   return store.query("SELECT * FROM captures WHERE id=?").get(id) as CaptureRow | null;

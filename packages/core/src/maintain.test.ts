@@ -85,6 +85,16 @@ describe("validateAll", () => {
     expect(leaks).toEqual([{ level: "warn", path: "200_silver/208_reviews/W41.md", msg: expect.stringContaining("200_silver/203_finance/2026-10.md") }]);
     expect(issues.filter((i) => i.level === "error")).toEqual([]);
   });
+
+  test("digit-run check skips calendar event keys (Google Calendar ids) but still flags a bare number", () => {
+    const root = fixtureRoot();
+    const note = (name: string, body: string) => writeFileSync(join(root, "200_silver/210_health", name), `---\ntype: health_log\ntitle: "${name} 健康記録"\nstatus: active\ncreated: 2026-10-01\nupdated: 2026-10-01\n---\n${body}`);
+    note("2026-11.md", "- key: ani@example.com|1dc39o32565hhmrhkgsqp8bc3m_20261027T021500Z\n  - key: en.japanese#holiday@group.v.calendar.google.com|20270101_o525inlrn6bmts96r3854k09kc\n");
+    note("2026-12.md", "口座 1234567\n");
+    const cfg = loadConfig(root);
+    const digits = validateAll(cfg, new SchemaRegistry(cfg)).filter((i) => i.msg.startsWith("long digit run")).map((i) => i.path);
+    expect(digits).toEqual(["200_silver/210_health/2026-12.md"]);
+  });
 });
 
 describe("validateAll monthly titles", () => {
